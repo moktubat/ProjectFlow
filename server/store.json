@@ -1,0 +1,21 @@
+{
+  "users": [
+    {
+      "_id": "usr_0viqysz9i",
+      "name": "Moktubat Jaman",
+      "username": "moktubat",
+      "email": "moktubatjaman@gmail.com",
+      "role": "SUPER_ADMIN",
+      "status": "APPROVED",
+      "passwordHash": "84322c0490db9719b3cce0e2fe29f1ca67a0e6d2babf1660a990a957b0f49c0e",
+      "createdAt": "2026-06-10T10:39:43.342Z",
+      "id": "usr_0viqysz9i"
+    }
+  ],
+  "projects": [],
+  "tasks": [],
+  "teams": [],
+  "comments": [],
+  "notifications": [],
+  "activities": []
+}

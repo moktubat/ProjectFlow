@@ -1,0 +1,6 @@
+{
+  "name": "ProjectFlow",
+  "description": "An internal office project management web application featuring interactive dashboards, Gantt-like progress Tracking, hour logs, and tasks Kanban board.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
