@@ -1,269 +1,150 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useEffect } from "react";
 import { useUIStore } from "../../store/ui-store.js";
 import { Button } from "../ui/Button.js";
 import { Input } from "../ui/Input.js";
 import { Modal } from "../ui/Modal.js";
 import { Team, User, Role } from "../../types/index.js";
-import { Users, Plus, ShieldCheck, Trash2, ShieldAlert, UsersRound } from "lucide-react";
+import { Users, Plus, Trash2, AlertCircle, UsersRound } from "lucide-react";
 
 export function TeamsView() {
-  const token = useUIStore((state) => state.token);
-  const user = useUIStore((state) => state.user);
-  
-  const [teamsList, setTeamsList] = useState<Team[]>([]);
-  const [usersList, setUsersList] = useState<User[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-
-  // Form states
-  const [teamName, setTeamName] = useState("");
-  const [teamDesc, setTeamDesc] = useState("");
+  const token = useUIStore((s) => s.token);
+  const user = useUIStore((s) => s.user);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isOpen, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
   const [leadId, setLeadId] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const fetchTeams = async () => {
+  const load = async () => {
     if (!token) return;
-    setIsLoading(true);
-    try {
-      const [tRes, uRes] = await Promise.all([
-        fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
-        fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } })
-      ]);
-
-      if (tRes.ok) setTeamsList(await tRes.json());
-      if (uRes.ok) setUsersList(await uRes.json());
-    } catch (err) {
-      console.warn("Error loading teams dataset:", err);
-    } finally {
-      setIsLoading(false);
-    }
+    setLoading(true);
+    const [tR, uR] = await Promise.all([
+      fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
+      fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
+    ]);
+    if (tR.ok) setTeams(await tR.json());
+    if (uR.ok) setUsers(await uR.json());
+    setLoading(false);
   };
 
-  useEffect(() => {
-    fetchTeams();
-  }, [token]);
+  useEffect(() => { load(); }, [token]);
 
-  const handleFormSubmit = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!teamName.trim() || !leadId) {
-      setFormError("Team Name and Team Lead assignment are required.");
-      return;
-    }
-
-    setIsSubmitting(true);
-    setFormError(null);
-
+    if (!name.trim() || !leadId) { setErr("Name and team lead are required."); return; }
+    setBusy(true); setErr(null);
     try {
       const res = await fetch("/api/teams", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ name: teamName, description: teamDesc, leadId })
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name, description: desc, leadId }),
       });
-
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || "Failed to create Team.");
-      }
-
-      setTeamName("");
-      setTeamDesc("");
-      setLeadId("");
-      setIsModalOpen(false);
-      fetchTeams();
-    } catch (err: any) {
-      setFormError(err.message || "An unexpected error occurred.");
-    } finally {
-      setIsSubmitting(false);
-    }
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      setName(""); setDesc(""); setLeadId(""); setOpen(false); load();
+    } catch (e: any) { setErr(e.message); }
+    finally { setBusy(false); }
   };
 
-  const handleDeleteTeam = async (tId: string) => {
-    if (!confirm("Confirm: Disband this team squad permanently? Assigned staff members will revert to unassigned positions.")) return;
-    try {
-      const res = await fetch(`/api/teams/${tId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        fetchTeams();
-      } else {
-        const d = await res.json();
-        alert(`Error: ${d.error}`);
-      }
-    } catch {
-      alert("Failed to delete team.");
-    }
+  const handleDelete = async (id: string) => {
+    if (!confirm("Disband this team? Members will become unassigned.")) return;
+    const res = await fetch(`/api/teams/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+    if (res.ok) load(); else { const d = await res.json(); alert(d.error); }
   };
 
-  // Check privileges
-  const canManage = user && (user.role === Role.SUPER_ADMIN || user.role === Role.ADMIN || user.role === Role.PROJECT_MANAGER);
-
-  const getLeadName = (leadId: string) => {
-    const matched = usersList.find(u => u.id === leadId);
-    return matched ? matched.name : "@" + leadId;
-  };
+  const canManage = user && [Role.SUPER_ADMIN, Role.ADMIN, Role.PROJECT_MANAGER].includes(user.role);
+  const getLeadName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-200 font-sans">
-      
-      {/* Header Panel */}
-      <div className="flex flex-col sm:flex-row justify-between sm:items-center bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs">
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-[#E8E8E8] rounded-xl px-4 py-3.5">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 font-display">System Squads & Teams</h2>
-          <p className="text-slate-500 text-xs mt-1 font-mono uppercase tracking-wide">
-            Enterprise division structures management
-          </p>
+          <h2 className="text-base font-semibold text-[#111111]">Teams</h2>
+          <p className="text-sm text-[#737373] mt-0.5">Organize members into teams</p>
         </div>
         {canManage && (
-          <div className="mt-4 sm:mt-0">
-            <Button
-              onClick={() => setIsModalOpen(true)}
-              variant="primary"
-              className="inline-flex items-center space-x-1.5"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Charter New Squad</span>
-            </Button>
-          </div>
+          <Button onClick={() => setOpen(true)} variant="primary" size="sm">
+            <Plus className="w-3.5 h-3.5" /> New team
+          </Button>
         )}
       </div>
 
-      {isLoading ? (
-        <div className="py-24 text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-theme-purple mx-auto mb-2" />
-          <span className="text-xs text-slate-400 font-medium">Fetching corporate teams records...</span>
+      {loading ? (
+        <div className="flex justify-center py-20">
+          <div className="w-7 h-7 border-2 border-[#0038BC] border-t-transparent rounded-full animate-spin" />
         </div>
       ) : (
-        /* Team Grid Card lists */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {teamsList.map((team) => (
-            <div
-              key={team.id}
-              className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between h-56"
-            >
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2.5">
-                    <div className="p-2 bg-purple-50 text-theme-purple rounded-lg">
-                      <Users className="w-5 h-5" />
-                    </div>
-                    <h3 className="font-bold text-slate-800 font-display text-base leading-snug truncate">{team.name}</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {teams.map((t) => (
+            <div key={t.id} className="bg-white border border-[#E8E8E8] rounded-xl p-4">
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-[#e8edfb] rounded-lg">
+                    <Users className="w-3.5 h-3.5 text-[#0038BC]" />
                   </div>
-                  {canManage && (
-                    <button
-                      onClick={() => handleDeleteTeam(team.id)}
-                      className="p-1 px-2.5 text-slate-400 hover:text-theme-pink hover:bg-pink-50 rounded-lg transition-colors border border-slate-200/30"
-                      title="Disband squad"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
+                  <h3 className="text-sm font-medium text-[#111111]">{t.name}</h3>
                 </div>
-                <p className="text-xs text-slate-500 leading-relaxed font-sans line-clamp-2">
-                  {team.description || "No charter details entered for this core squad group."}
-                </p>
+                {canManage && (
+                  <button onClick={() => handleDelete(t.id)} className="p-1.5 text-[#A0A0A0] hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
-
-              {/* Ranks details */}
-              <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-mono font-medium">
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Designated Lead</div>
-                  <div className="text-slate-800 font-bold">{getLeadName(team.leadId)}</div>
+              <p className="text-sm text-[#737373] mb-4 line-clamp-2 min-h-[2.5rem]">{t.description || "No description."}</p>
+              <div className="flex items-center justify-between pt-3 border-t border-[#E8E8E8]">
+                <div>
+                  <p className="text-xs text-[#A0A0A0]">Lead</p>
+                  <p className="text-sm text-[#111111]">{getLeadName(t.leadId)}</p>
                 </div>
-
-                <div className="text-right space-y-1">
-                  <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Active Staffs</div>
-                  <div className="text-theme-teal font-extrabold">{team.membersCount} active</div>
+                <div className="text-right">
+                  <p className="text-xs text-[#A0A0A0]">Members</p>
+                  <p className="text-sm font-medium text-[#0038BC]">{t.membersCount}</p>
                 </div>
               </div>
             </div>
           ))}
-
-          {teamsList.length === 0 && (
-            <div className="col-span-full border-2 border-dashed border-slate-200 rounded-2xl py-24 text-center">
-              <UsersRound className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-              <p className="text-sm font-bold text-slate-600">Company has no current active teams</p>
-              <p className="text-xs text-slate-400 italic max-w-sm mx-auto mt-1 pl-4">
-                Administrators can charter structures using the create action buttons above.
-              </p>
+          {teams.length === 0 && (
+            <div className="col-span-full flex flex-col items-center justify-center py-16 border-2 border-dashed border-[#E8E8E8] rounded-xl">
+              <UsersRound className="w-8 h-8 text-[#D0D0D0] mb-2" />
+              <p className="text-sm text-[#525252]">No teams yet</p>
+              <p className="text-xs text-[#A0A0A0] mt-1">Create a team to organize your members.</p>
             </div>
           )}
         </div>
       )}
 
-      {/* Team Charter Modal */}
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Charter Core Squad">
-        <form onSubmit={handleFormSubmit} className="space-y-4">
-          {formError && (
-            <div className="p-2.5 bg-pink-50 border border-pink-100 rounded-lg text-theme-pink text-xs font-semibold flex items-center space-x-1.5">
-              <ShieldAlert className="w-4 h-4" />
-              <span>{formError}</span>
+      <Modal isOpen={isOpen} onClose={() => setOpen(false)} title="New team">
+        <form onSubmit={handleCreate} className="space-y-4">
+          {err && (
+            <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />{err}
             </div>
           )}
-
-          <Input
-            id="t-name"
-            label="Squad Name / Title"
-            placeholder="e.g. Design Engineers"
-            value={teamName}
-            onChange={(e) => setTeamName(e.target.value)}
-            required
-          />
-
+          <Input label="Team name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Frontend team" required />
           <div>
-            <label htmlFor="t-desc" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1 px-1">
-              Charter Description Statement
-            </label>
-            <textarea
-              id="t-desc"
-              rows={3}
-              placeholder="State clear team goals..."
-              value={teamDesc}
-              onChange={(e) => setTeamDesc(e.target.value)}
-              className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-800 focus:outline-none focus:border-theme-teal focus:ring-1 focus:ring-teal-400"
-            />
+            <label className="block text-xs text-[#737373] mb-1">Description</label>
+            <textarea rows={3} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="What does this team work on?"
+              className="w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm placeholder:text-[#A0A0A0] focus:outline-none focus:ring-2 focus:ring-[#0038BC]/10 focus:border-[#0038BC] resize-none" />
           </div>
-
           <div>
-            <label htmlFor="t-lead" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1 px-1">
-              Allot Corporate Team Lead
-            </label>
-            <select
-              id="t-lead"
-              value={leadId}
-              onChange={(e) => setLeadId(e.target.value)}
-              required
-              className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-800 focus:outline-none focus:border-theme-teal focus:ring-1"
-            >
-              <option value="">-- Choose Approved Lead --</option>
-              {usersList.filter(u => u.status === "APPROVED").map((usr) => (
-                <option key={usr.id} value={usr.id}>
-                  {usr.name} (@{usr.username})
-                </option>
+            <label className="block text-xs text-[#737373] mb-1">Team lead *</label>
+            <select value={leadId} onChange={(e) => setLeadId(e.target.value)} required
+              className="w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/10 focus:border-[#0038BC]">
+              <option value="">Select a lead…</option>
+              {users.filter((u) => u.status === "APPROVED").map((u) => (
+                <option key={u.id} value={u.id}>{u.name} (@{u.username})</option>
               ))}
             </select>
           </div>
-
-          <div className="flex justify-end space-x-3 pt-4 border-t border-slate-100">
-            <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" isLoading={isSubmitting}>
-              Apply Squad Charter
-            </Button>
+          <div className="flex justify-end gap-2 pt-2 border-t border-[#E8E8E8]">
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="primary" isLoading={busy}>Create team</Button>
           </div>
         </form>
       </Modal>
-
     </div>
   );
 }

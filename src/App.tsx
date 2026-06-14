@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useEffect } from "react";
 import { useUIStore } from "./store/ui-store.js";
 import { Sidebar } from "./components/layout/Sidebar.js";
@@ -21,107 +16,68 @@ import TrashBinView from "./components/views/TrashBinView.js";
 import { ToastNotificationManager } from "./components/layout/ToastNotificationManager.js";
 
 export default function App() {
-  const token = useUIStore((state) => state.token);
-  const currentPath = useUIStore((state) => state.currentPath);
-  const setSession = useUIStore((state) => state.setSession);
-  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
-  const setSidebarOpen = useUIStore((state) => state.setSidebarOpen);
+  const token = useUIStore((s) => s.token);
+  const currentPath = useUIStore((s) => s.currentPath);
+  const setSession = useUIStore((s) => s.setSession);
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
 
-  // Auto restore sessions on initial frame boots
   useEffect(() => {
-    const savedToken = localStorage.getItem("pf_session_token");
-    if (savedToken) {
-      fetch("/api/auth/session", {
-        headers: { Authorization: `Bearer ${savedToken}` }
-      })
-        .then((res) => {
-          if (res.ok) return res.json();
-          throw new Error("Invalid stored credentials");
-        })
-        .then((data) => {
-          setSession(data.user, savedToken);
-        })
-        .catch(() => {
-          localStorage.removeItem("pf_session_token");
-        });
+    const saved = localStorage.getItem("pf_session_token");
+    if (saved) {
+      fetch("/api/auth/session", { headers: { Authorization: `Bearer ${saved}` } })
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((d) => setSession(d.user, saved))
+        .catch(() => localStorage.removeItem("pf_session_token"));
     }
   }, []);
 
-  // Prevent browser default routing or reloads when items are dropped on the window
   useEffect(() => {
-    const preventDefaultDrop = (e: DragEvent) => {
-      e.preventDefault();
-    };
-    window.addEventListener("dragover", preventDefaultDrop, false);
-    window.addEventListener("drop", preventDefaultDrop, false);
+    const prevent = (e: DragEvent) => e.preventDefault();
+    window.addEventListener("dragover", prevent, false);
+    window.addEventListener("drop", prevent, false);
     return () => {
-      window.removeEventListener("dragover", preventDefaultDrop);
-      window.removeEventListener("drop", preventDefaultDrop);
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
     };
   }, []);
 
-  // Unauthenticated viewport route controls
   if (!token) {
-    if (currentPath === "register") {
-      return <RegisterView />;
-    }
-    return <LoginView />;
+    return currentPath === "register" ? <RegisterView /> : <LoginView />;
   }
 
-  // Router resolution engine
   const renderView = () => {
     switch (currentPath) {
-      case "dashboard":
+      case "dashboard": return <DashboardView />;
+      case "projects": return <ProjectsView />;
+      case "tasks": return <TasksListView />;
+      case "teams": return <TeamsView />;
+      case "users": return <UsersApprovalView />;
+      case "notifications": return <NotificationsView />;
+      case "trash": return <TrashBinView />;
+      default: {
+        const proj = currentPath.match(/^projects\/(.+)$/);
+        if (proj) return <ProjectDetailsView projectId={proj[1]} />;
+        const task = currentPath.match(/^tasks\/(.+)$/);
+        if (task) return <TaskDetailsView taskId={task[1]} />;
         return <DashboardView />;
-      case "projects":
-        return <ProjectsView />;
-      case "tasks":
-        return <TasksListView />;
-      case "teams":
-        return <TeamsView />;
-      case "users":
-        return <UsersApprovalView />;
-      case "notifications":
-        return <NotificationsView />;
-      case "trash":
-        return <TrashBinView />;
-      default:
-        // Match project details with ID
-        const matchProj = currentPath.match(/^projects\/(.+)$/);
-        if (matchProj) {
-          return <ProjectDetailsView projectId={matchProj[1]} />;
-        }
-
-        // Match task details with ID
-        const matchTask = currentPath.match(/^tasks\/(.+)$/);
-        if (matchTask) {
-          return <TaskDetailsView taskId={matchTask[1]} />;
-        }
-
-        return <DashboardView />;
+      }
     }
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans overflow-hidden antialiased">
-      {/* Visual Workspace Sidebar */}
+    <div className="flex h-screen bg-[#F7F8FA] font-sans overflow-hidden antialiased">
       <Sidebar />
-
-      {/* Mobile Sidebar backdrop */}
       {sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-30 lg:hidden"
+        <div
+          className="fixed inset-0 bg-black/40 z-30 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
-
-      {/* Primary Workstation layout frame */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative lg:pl-64">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden lg:pl-60">
         <Navbar />
-
-        {/* Dynamic content scroll wrapper */}
-        <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 pb-20 focus:outline-none">
-          <div className="container mx-auto">
+        <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 pb-16 focus:outline-none">
+          <div className="max-w-7xl mx-auto">
             {renderView()}
           </div>
         </main>

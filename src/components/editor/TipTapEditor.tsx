@@ -1,314 +1,160 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useEffect, useRef } from "react";
-import { Bold, Italic, Code, Link, Heading1, List, AlertCircle, Sparkles } from "lucide-react";
+import { Bold, Italic, Code, Link, Heading1, List, Sparkles, AlertCircle } from "lucide-react";
 import { useUIStore } from "../../store/ui-store.js";
 
 interface TipTapEditorProps {
   value: string;
   onChange: (val: string) => void;
   placeholder?: string;
-  projectId?: string; // If supplied, we fetch mentionables
+  projectId?: string;
 }
 
-export function TipTapEditor({ value, onChange, placeholder = "Write something useful...", projectId }: TipTapEditorProps) {
+export function TipTapEditor({ value, onChange, placeholder = "Write something...", projectId }: TipTapEditorProps) {
   const [isPreview, setIsPreview] = useState(false);
+  const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
-  const [showMentionDropdown, setShowMentionDropdown] = useState(false);
-  const [mentionPosition, setMentionPosition] = useState({ top: 0, left: 0 });
-  
-  const [mentionSuggestions, setMentionSuggestions] = useState<{
-    users: { id: string; name: string; username: string; email: string }[];
-    teams: { id: string; name: string; description: string }[];
-  }>({ users: [], teams: [] });
-
+  const [suggestions, setSuggestions] = useState<{ users: any[]; teams: any[] }>({ users: [], teams: [] });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const token = useUIStore((state) => state.token);
+  const token = useUIStore((s) => s.token);
 
-  // Fetch mentionables if typing '@'
   useEffect(() => {
-    if (!projectId || !token || !mentionQuery) {
-      setMentionSuggestions({ users: [], teams: [] });
-      return;
-    }
-
-    const timer = setTimeout(async () => {
+    if (!projectId || !token || !mentionQuery) { setSuggestions({ users: [], teams: [] }); return; }
+    const t = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/mentionable?q=${encodeURIComponent(mentionQuery)}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setMentionSuggestions(data);
-        }
-      } catch (err) {
-        console.warn("Error fetching mentionables:", err);
-      }
+        const res = await fetch(`/api/projects/${projectId}/mentionable?q=${encodeURIComponent(mentionQuery)}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (res.ok) setSuggestions(await res.json());
+      } catch { }
     }, 150);
-
-    return () => clearTimeout(timer);
+    return () => clearTimeout(t);
   }, [mentionQuery, projectId, token]);
 
-  // Insert custom Markdown/HTML marker
-  const insertText = (before: string, after: string = "") => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
+  const insert = (before: string, after = "") => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const sel = value.substring(s, e);
+    const next = value.substring(0, s) + before + sel + after + value.substring(e);
+    onChange(next);
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(s + before.length, s + before.length + sel.length); }, 0);
+  };
 
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const originalText = textarea.value;
-
-    const selectedText = originalText.substring(start, end);
-    const replacement = before + (selectedText || "") + after;
-
-    const newVal = originalText.substring(0, start) + replacement + originalText.substring(end);
-    onChange(newVal);
-    
-    // Reset focus and cursor position
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + before.length, start + before.length + selectedText.length);
-    }, 0);
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    onChange(val);
+    if (showMention) {
+      const before = val.substring(0, e.target.selectionStart);
+      const at = before.lastIndexOf("@");
+      if (at !== -1) setMentionQuery(before.substring(at + 1));
+      else setShowMention(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "@" && projectId) {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      
-      const { selectionStart } = textarea;
-      const textBeforeCursor = textarea.value.substring(0, selectionStart);
-      
-      // Get coordinates of the cursor for dropdown (approximate)
-      const rect = textarea.getBoundingClientRect();
-      setMentionPosition({
-        top: Math.min(200, rect.height - 30),
-        left: Math.max(10, Math.min(rect.width - 250, (selectionStart % 30) * 8))
-      });
-
-      setShowMentionDropdown(true);
-      setMentionQuery("");
-    } else if (showMentionDropdown) {
-      if (e.key === "Escape" || e.key === " ") {
-        setShowMentionDropdown(false);
-      }
-    }
+    if (e.key === "@" && projectId) { setShowMention(true); setMentionQuery(""); }
+    if (showMention && (e.key === "Escape" || e.key === " ")) setShowMention(false);
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    onChange(val);
-
-    if (showMentionDropdown) {
-      const textarea = textareaRef.current;
-      if (textarea) {
-        const { selectionStart } = textarea;
-        const textBeforeCursor = val.substring(0, selectionStart);
-        const atIndex = textBeforeCursor.lastIndexOf("@");
-        if (atIndex !== -1) {
-          const query = textBeforeCursor.substring(atIndex + 1);
-          setMentionQuery(query);
-        } else {
-          setShowMentionDropdown(false);
-        }
-      }
-    }
+  const selectMention = (text: string) => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const before = value.substring(0, ta.selectionStart);
+    const at = before.lastIndexOf("@");
+    if (at === -1) return;
+    const next = value.substring(0, at) + text + " " + value.substring(ta.selectionStart);
+    onChange(next);
+    setShowMention(false);
+    setTimeout(() => { ta.focus(); const c = at + text.length + 1; ta.setSelectionRange(c, c); }, 0);
   };
 
-  const selectMention = (mentionText: string) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const { selectionStart } = textarea;
-    const textBeforeCursor = textarea.value.substring(0, selectionStart);
-    const atIndex = textBeforeCursor.lastIndexOf("@");
-    
-    if (atIndex !== -1) {
-      const originalText = textarea.value;
-      const newVal = 
-        originalText.substring(0, atIndex) + 
-        mentionText + " " + 
-        originalText.substring(selectionStart);
-      
-      onChange(newVal);
-      setShowMentionDropdown(false);
-      
-      setTimeout(() => {
-        textarea.focus();
-        const cursor = atIndex + mentionText.length + 1;
-        textarea.setSelectionRange(cursor, cursor);
-      }, 0);
-    }
-  };
+  const toolbarBtns = [
+    { icon: Bold, action: () => insert("**", "**"), title: "Bold" },
+    { icon: Italic, action: () => insert("*", "*"), title: "Italic" },
+    { icon: Heading1, action: () => insert("# "), title: "Heading" },
+    { icon: List, action: () => insert("- "), title: "List" },
+    { icon: Code, action: () => insert("`", "`"), title: "Code" },
+    { icon: Link, action: () => { const u = prompt("URL:"); if (u) insert("[", `](${u})`); }, title: "Link" },
+  ];
 
   return (
-    <div className="border border-slate-200 rounded-xl bg-white shadow-xs overflow-hidden transition-all duration-200 focus-within:border-theme-teal focus-within:ring-2 focus-within:ring-teal-100/40">
-      {/* Editor Toolbar */}
-      <div className="flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border-b border-slate-200">
-        <div className="flex items-center space-x-1">
-          <button
-            type="button"
-            onClick={() => insertText("**", "**")}
-            className="p-1 px-2 text-slate-600 hover:bg-slate-200 hover:text-slate-900 rounded-md transition-colors"
-            title="Bold"
-          >
-            <Bold className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => insertText("*", "*")}
-            className="p-1 px-2 text-slate-600 hover:bg-slate-200 hover:text-slate-900 rounded-md transition-colors"
-            title="Italic"
-          >
-            <Italic className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => insertText("# ", "")}
-            className="p-1 px-2 text-slate-600 hover:bg-slate-200 hover:text-slate-900 rounded-md transition-colors"
-            title="Header"
-          >
-            <Heading1 className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => insertText("- ", "")}
-            className="p-1 px-2 text-slate-600 hover:bg-slate-200 hover:text-slate-900 rounded-md transition-colors"
-            title="List"
-          >
-            <List className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => insertText("`", "`")}
-            className="p-1 px-2 text-slate-600 hover:bg-slate-200 hover:text-slate-900 rounded-md transition-colors"
-            title="Code Block"
-          >
-            <Code className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const url = prompt("Enter website URL link:");
-              if (url) insertText(`[`, `](${url})`);
-            }}
-            className="p-1 px-2 text-slate-600 hover:bg-slate-200 hover:text-slate-900 rounded-md transition-colors"
-            title="Link"
-          >
-            <Link className="w-4 h-4" />
-          </button>
+    <div className="border border-[#D0D0D0] rounded-lg overflow-hidden bg-white focus-within:border-[#0038BC] focus-within:ring-2 focus-within:ring-[#0038BC]/10 transition-colors">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[#E8E8E8] bg-[#F7F8FA]">
+        <div className="flex items-center gap-0.5">
+          {toolbarBtns.map(({ icon: Icon, action, title }) => (
+            <button key={title} type="button" onClick={action} title={title}
+              className="p-1.5 text-[#737373] hover:text-[#111111] hover:bg-[#EEEEEE] rounded transition-colors">
+              <Icon className="w-3.5 h-3.5" />
+            </button>
+          ))}
         </div>
-
-        {/* Preview / Write Toggle */}
-        <div className="flex bg-slate-200/60 p-0.5 rounded-lg text-xs font-semibold">
-          <button
-            type="button"
-            onClick={() => setIsPreview(false)}
-            className={`px-3 py-1 rounded-md transition-colors ${!isPreview ? "bg-white text-slate-800 shadow-xs" : "text-slate-600 hover:text-slate-800"}`}
-          >
-            Write
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsPreview(true)}
-            className={`px-3 py-1 rounded-md transition-colors ${isPreview ? "bg-white text-slate-800 shadow-xs" : "text-slate-600 hover:text-slate-800"}`}
-          >
-            Formatted Preview
-          </button>
+        <div className="flex bg-[#EEEEEE] p-0.5 rounded-md text-xs">
+          {["Write", "Preview"].map((t) => (
+            <button key={t} type="button"
+              onClick={() => setIsPreview(t === "Preview")}
+              className={`px-2.5 py-1 rounded transition-colors ${(t === "Preview") === isPreview ? "bg-white text-[#111111] shadow-sm" : "text-[#737373]"}`}>
+              {t}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Editor Body */}
-      <div className="relative p-1">
+      {/* Body */}
+      <div className="relative">
         {!isPreview ? (
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-            rows={4}
-            className="w-full px-4 py-3 text-slate-800 text-sm focus:outline-none resize-y border-0 placeholder:text-slate-400 font-sans"
-          />
+          <textarea ref={textareaRef} value={value} onChange={handleChange} onKeyDown={handleKeyDown}
+            placeholder={placeholder} rows={4}
+            className="w-full px-3 py-2.5 text-sm text-[#111111] placeholder:text-[#A0A0A0] focus:outline-none resize-y" />
         ) : (
-          <div className="min-h-[110px] w-full px-4 py-3 text-slate-800 text-sm overflow-y-auto whitespace-pre-wrap font-sans prose prose-slate">
-            {value.trim() ? (
-              // Simple Markdown Renderer
-              value
+          <div className="min-h-[100px] px-3 py-2.5 text-sm text-[#525252] prose prose-sm max-w-none">
+            {value.trim() ? value.split("\n").map((line, i) => {
+              const html = line
                 .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
                 .replace(/\*(.*?)\*/g, "<em>$1</em>")
-                .replace(/`(.*?)`/g, "<code class='bg-slate-100 text-pink-600 px-1 py-0.5 rounded font-mono text-xs'>$1</code>")
-                .replace(/\[(.*?)\]\((.*?)\)/g, "<a href='$2' target='_blank' rel='noopener noreferrer' class='text-theme-teal underline font-medium'>$1</a>")
-                .split("\n")
-                .map((line, idx) => {
-                  if (line.startsWith("# ")) {
-                    return <h3 key={idx} className="text-base font-bold text-slate-900 mt-2 mb-1">{line.replace("# ", "")}</h3>;
-                  }
-                  if (line.startsWith("- ")) {
-                    return <li key={idx} className="ml-4 list-disc text-slate-700">{line.replace("- ", "")}</li>;
-                  }
-                  return <p key={idx} className="mb-1 text-slate-600" dangerouslySetInnerHTML={{ __html: line }} />;
-                })
-            ) : (
-              <span className="text-slate-400 italic">Nothing to display. Write some content first.</span>
-            )}
+                .replace(/`(.*?)`/g, "<code class='bg-[#F4F4F4] px-1 rounded text-xs font-mono'>$1</code>")
+                .replace(/\[(.*?)\]\((.*?)\)/g, "<a href='$2' class='text-[#0038BC] underline'>$1</a>");
+              if (line.startsWith("# ")) return <h3 key={i} className="font-semibold text-[#111111]">{line.slice(2)}</h3>;
+              if (line.startsWith("- ")) return <li key={i} className="ml-4 list-disc">{line.slice(2)}</li>;
+              return <p key={i} dangerouslySetInnerHTML={{ __html: html }} />;
+            }) : <span className="text-[#A0A0A0] italic">Nothing to preview.</span>}
           </div>
         )}
 
-        {/* TipTap @Mention Suggestions Dropdown Popup */}
-        {showMentionDropdown && projectId && (
-          <div
-            className="absolute bg-white rounded-lg border border-slate-200 shadow-lg z-50 p-2.5 w-64 text-xs font-sans text-slate-700 font-medium"
-            style={{ top: `${mentionPosition.top}px`, left: `${mentionPosition.left}px` }}
-          >
-            <div className="flex items-center space-x-1.5 pb-2 mb-2 border-b border-slate-100 text-[10px] uppercase font-mono tracking-wider text-slate-400">
-              <Sparkles className="w-3.5 h-3.5 text-theme-teal" />
-              <span>TipTap Mentionables List</span>
+        {/* Mention dropdown */}
+        {showMention && projectId && (
+          <div className="absolute bottom-full mb-1 left-2 bg-white border border-[#E8E8E8] rounded-lg shadow-lg z-50 w-56 p-2">
+            <div className="flex items-center gap-1.5 text-xs text-[#737373] mb-2 pb-1.5 border-b border-[#E8E8E8]">
+              <Sparkles className="w-3 h-3 text-[#0038BC]" />
+              Mentions
             </div>
-
-            {/* Suggestions lists */}
-            {mentionSuggestions.users.length === 0 && mentionSuggestions.teams.length === 0 ? (
-              <div className="py-2 text-slate-400 text-center flex items-center justify-center space-x-1">
-                <AlertCircle className="w-3.5 h-3.5" />
-                <span>Typing... or no matching members</span>
+            {suggestions.users.length === 0 && suggestions.teams.length === 0 ? (
+              <div className="flex items-center gap-1.5 text-xs text-[#A0A0A0] py-1">
+                <AlertCircle className="w-3.5 h-3.5" /> No matches
               </div>
             ) : (
-              <div className="max-h-48 overflow-y-auto space-y-2">
-                {mentionSuggestions.users.length > 0 && (
-                  <div>
-                    <div className="text-[10px] text-slate-400 font-bold mb-1 font-mono">USERS</div>
-                    {mentionSuggestions.users.map((u) => (
-                      <button
-                        key={u.id}
-                        type="button"
-                        onClick={() => selectMention(`@${u.username}`)}
-                        className="w-full text-left p-1.5 rounded hover:bg-slate-100 flex items-center justify-between"
-                      >
-                        <span className="font-semibold text-slate-800 truncate">{u.name}</span>
-                        <span className="text-[10px] text-slate-400 font-mono">@{u.username}</span>
+              <div className="max-h-40 overflow-y-auto space-y-0.5">
+                {suggestions.users.length > 0 && (
+                  <>
+                    <p className="text-xs text-[#A0A0A0] px-1 mb-1">Users</p>
+                    {suggestions.users.map((u) => (
+                      <button key={u.id} type="button" onClick={() => selectMention(`@${u.username}`)}
+                        className="w-full text-left px-2 py-1.5 rounded hover:bg-[#F4F4F4] text-sm flex items-center justify-between">
+                        <span className="font-medium text-[#111111]">{u.name}</span>
+                        <span className="text-xs text-[#A0A0A0]">@{u.username}</span>
                       </button>
                     ))}
-                  </div>
+                  </>
                 )}
-
-                {mentionSuggestions.teams.length > 0 && (
-                  <div>
-                    <div className="text-[10px] text-slate-400 font-bold mb-1 font-mono">TEAMS</div>
-                    {mentionSuggestions.teams.map((t) => (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => selectMention(`@${t.name}`)}
-                        className="w-full text-left p-1.5 rounded hover:bg-slate-100 flex items-center justify-between"
-                      >
-                        <span className="font-semibold text-slate-800 truncate">{t.name}</span>
-                        <span className="text-[10px] text-theme-teal font-mono">Team</span>
+                {suggestions.teams.length > 0 && (
+                  <>
+                    <p className="text-xs text-[#A0A0A0] px-1 mt-1 mb-1">Teams</p>
+                    {suggestions.teams.map((t) => (
+                      <button key={t.id} type="button" onClick={() => selectMention(`@${t.name}`)}
+                        className="w-full text-left px-2 py-1.5 rounded hover:bg-[#F4F4F4] text-sm flex items-center justify-between">
+                        <span className="font-medium text-[#111111]">{t.name}</span>
+                        <span className="text-xs text-[#0038BC]">Team</span>
                       </button>
                     ))}
-                  </div>
+                  </>
                 )}
               </div>
             )}

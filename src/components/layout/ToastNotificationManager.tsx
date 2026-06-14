@@ -1,147 +1,69 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useEffect, useState, useRef } from "react";
 import { useUIStore } from "../../store/ui-store.js";
 import { Notification } from "../../types/index.js";
-import { Bell, X, ArrowRight, MessageSquare, Briefcase, BookmarkCheck } from "lucide-react";
+import { Bell, X, ArrowRight } from "lucide-react";
 
 export function ToastNotificationManager() {
-  const notifications = useUIStore((state) => state.notifications);
-  const navigate = useUIStore((state) => state.navigate);
-  const token = useUIStore((state) => state.token);
-  const setNotifications = useUIStore((state) => state.setNotifications);
+  const notifications = useUIStore((s) => s.notifications);
+  const navigate = useUIStore((s) => s.navigate);
+  const token = useUIStore((s) => s.token);
+  const setNotifications = useUIStore((s) => s.setNotifications);
 
   const [activeToast, setActiveToast] = useState<Notification | null>(null);
-  const notifiedIdsRef = useRef<Set<string>>(new Set<string>());
-  const isMountedRef = useRef(false);
+  const notifiedIds = useRef<Set<string>>(new Set());
+  const initialized = useRef(false);
 
-  // Initialize: mark current unread list as already notified so we only toast NEW incoming changes
   useEffect(() => {
-    if (notifications.length > 0 && !isMountedRef.current) {
-      notifications.forEach((n) => {
-        if (!n.isRead) {
-          notifiedIdsRef.current.add(n.id);
-        }
-      });
-      isMountedRef.current = true;
+    if (!initialized.current && notifications.length > 0) {
+      notifications.forEach((n) => { if (!n.isRead) notifiedIds.current.add(n.id); });
+      initialized.current = true;
     }
   }, [notifications]);
 
-  // Hook into incoming notifications
   useEffect(() => {
-    if (!isMountedRef.current && notifications.length > 0) {
-      isMountedRef.current = true;
-    }
-
-    const unread = notifications.filter((n) => !n.isRead);
-    const brandNew = unread.find((n) => !notifiedIdsRef.current.has(n.id));
-
-    if (brandNew) {
-      // Push into our notified set to hold off duplicates
-      notifiedIdsRef.current.add(brandNew.id);
-      setActiveToast(brandNew);
-
-      // Dismiss automatically after 5.5 seconds
-      const timer = setTimeout(() => {
-        setActiveToast(null);
-      }, 5500);
-
-      return () => clearTimeout(timer);
-    }
+    if (!initialized.current) return;
+    const newOne = notifications.filter((n) => !n.isRead).find((n) => !notifiedIds.current.has(n.id));
+    if (!newOne) return;
+    notifiedIds.current.add(newOne.id);
+    setActiveToast(newOne);
+    const t = setTimeout(() => setActiveToast(null), 5000);
+    return () => clearTimeout(t);
   }, [notifications]);
 
-  const handleDismiss = () => {
-    setActiveToast(null);
-  };
-
-  const handleToastClick = async () => {
+  const handleClick = async () => {
     if (!activeToast) return;
-    const toastId = activeToast.id;
-    const relatedId = activeToast.relatedProjectId;
-
-    // Dismiss toast
+    const { id, relatedProjectId } = activeToast;
     setActiveToast(null);
-
-    // Call server to mark as read
     if (token) {
       try {
-        const res = await fetch(`/api/notifications/${toastId}/read`, {
-          method: "PUT",
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (res.ok) {
-          // Re-fetch to sync
-          const reload = await fetch("/api/notifications", {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (reload.ok) {
-            setNotifications(await reload.json());
-          }
-        }
-      } catch (e) {
-        console.warn("Could not mark toast read:", e);
-      }
+        await fetch(`/api/notifications/${id}/read`, { method: "PUT", headers: { Authorization: `Bearer ${token}` } });
+        const res = await fetch("/api/notifications", { headers: { Authorization: `Bearer ${token}` } });
+        if (res.ok) setNotifications(await res.json());
+      } catch { }
     }
-
-    // Redirect to project workspace if present
-    if (relatedId) {
-      navigate(`projects/${relatedId}`);
-    } else {
-      navigate("notifications");
-    }
+    navigate(relatedProjectId ? `projects/${relatedProjectId}` : "notifications");
   };
 
   if (!activeToast) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden font-sans flex flex-col transition-all duration-300 animate-in fade-in slide-in-from-bottom-5">
-      
-      {/* Upper bar with action indicator/close */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800 bg-slate-950/70">
-        <div className="flex items-center space-x-1.5 text-[9.5px] font-mono font-bold uppercase tracking-wider text-indigo-400">
-          <Bell className="w-3.5 h-3.5 animate-bounce" />
-          <span>Live updates channels</span>
+    <div className="fixed bottom-5 right-5 z-50 w-80 bg-white border border-[#E8E8E8] rounded-xl shadow-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 bg-[#0038BC]">
+        <div className="flex items-center gap-2 text-white text-xs font-medium">
+          <Bell className="w-3.5 h-3.5" />
+          <span>New notification</span>
         </div>
-        <button 
-          onClick={handleDismiss}
-          className="p-1 hover:bg-slate-800 rounded-md text-slate-500 hover:text-slate-200 transition-colors"
-        >
+        <button onClick={() => setActiveToast(null)} className="text-white/70 hover:text-white">
           <X className="w-4 h-4" />
         </button>
       </div>
-
-      {/* Content wrapper */}
-      <div 
-        onClick={handleToastClick}
-        className="p-4 flex items-start space-x-3.5 cursor-pointer hover:bg-slate-800/40 transition-colors"
-      >
-        <div className="p-2.5 rounded-lg bg-indigo-500/20 text-indigo-400 font-extrabold shrink-0 mt-0.5">
-          {activeToast.message.includes("comment") ? (
-            <MessageSquare className="w-4.5 h-4.5" />
-          ) : activeToast.message.includes("document") || activeToast.message.includes("file") ? (
-            <Briefcase className="w-4.5 h-4.5" />
-          ) : (
-            <BookmarkCheck className="w-4.5 h-4.5" />
-          )}
-        </div>
-
-        <div className="flex-1 min-w-0 space-y-1">
-          <p className="text-xs text-white font-extrabold tracking-wide pr-3 line-clamp-2">
-            {activeToast.message}
-          </p>
-          <span className="text-[9.5px] text-slate-400 font-mono tracking-wider flex items-center space-x-1.5 hover:text-indigo-300 transition-colors">
-            <span>Manage source workspace</span>
-            <ArrowRight className="w-3.5 h-3.5 inline" />
-          </span>
-        </div>
+      <div onClick={handleClick} className="px-4 py-3 cursor-pointer hover:bg-[#F7F8FA] transition-colors">
+        <p className="text-sm text-[#111111] line-clamp-2">{activeToast.message}</p>
+        <span className="inline-flex items-center gap-1 text-xs text-[#0038BC] mt-1.5 font-medium">
+          View <ArrowRight className="w-3 h-3" />
+        </span>
       </div>
-
-      {/* Active slide progress bar helper */}
-      <div className="h-1 bg-gradient-to-r from-theme-teal to-theme-purple animate-pulse" style={{ width: "100%" }} />
-
+      <div className="h-0.5 bg-[#EF8F00] animate-pulse" />
     </div>
   );
 }

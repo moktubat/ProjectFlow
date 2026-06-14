@@ -1,24 +1,6 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useMemo } from "react";
 import { Task, User, Project } from "../../types/index.js";
-import { useUIStore } from "../../store/ui-store.js";
-import { 
-  TrendingDown, 
-  Users, 
-  BarChart4, 
-  PieChart, 
-  Clock, 
-  Zap, 
-  ShieldAlert, 
-  CheckCircle,
-  Clock4,
-  RefreshCw,
-  FolderLock
-} from "lucide-react";
+import { TrendingDown, Users, BarChart4, Clock, Zap, ShieldAlert, RefreshCw } from "lucide-react";
 
 interface ProjectSprintAnalyticsProps {
   tasks: Task[];
@@ -27,467 +9,165 @@ interface ProjectSprintAnalyticsProps {
 }
 
 export function ProjectSprintAnalytics({ tasks, users, project }: ProjectSprintAnalyticsProps) {
-  const token = useUIStore((state) => state.token);
-  const [activeMetricTab, setActiveMetricTab] = useState<"burndown" | "workload" | "breakout">("burndown");
-  const [burndownHoverIndex, setBurndownHoverIndex] = useState<number | null>(null);
+  const [tab, setTab] = useState<"burndown" | "workload" | "breakout">("burndown");
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
-  const activeTasks = useMemo(() => tasks.filter(t => !t.deleted), [tasks]);
+  const active = useMemo(() => tasks.filter((t) => !t.deleted), [tasks]);
 
-  // Overall KPI Calcs
   const kpis = useMemo(() => {
-    const totalCount = activeTasks.length;
-    const completedCount = activeTasks.filter(t => t.status === "Done").length;
-    const completePercentage = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-    
-    const totalEstimate = activeTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-    const totalLogged = activeTasks.reduce((sum, t) => {
-      return sum + t.timeLogs.reduce((acc, log) => acc + log.hours, 0);
-    }, 0);
-
-    // Overdue tasks
+    const total = active.length;
+    const done = active.filter((t) => t.status === "Done").length;
+    const est = active.reduce((s, t) => s + (t.estimatedHours ?? 0), 0);
+    const logged = active.reduce((s, t) => s + t.timeLogs.reduce((a, l) => a + l.hours, 0), 0);
     const now = new Date();
-    const overdueCount = activeTasks.filter(t => {
-      if (t.status === "Done") return false;
-      if (!t.dueDate) return false;
-      const due = new Date(t.dueDate);
-      return !isNaN(due.getTime()) && due < now;
-    }).length;
-
-    // Average project velocity
-    const daysDuration = 30; // default range divisor
-    const velocityPerDay = daysDuration > 0 ? (totalLogged / daysDuration).toFixed(1) : "0";
-
+    const overdue = active.filter((t) => t.status !== "Done" && t.dueDate && new Date(t.dueDate) < now).length;
     return {
-      totalCount,
-      completedCount,
-      completePercentage,
-      totalEstimate,
-      totalLogged,
-      overdueCount,
-      velocityPerDay
+      pct: total > 0 ? Math.round((done / total) * 100) : 0,
+      done, total, est, logged, overdue,
+      velocity: (logged / 30).toFixed(1),
     };
-  }, [activeTasks]);
+  }, [active]);
 
-  // Status Breakout Analytics
   const statusData = useMemo(() => {
-    const todo = activeTasks.filter(t => t.status === "To Do").length;
-    const progress = activeTasks.filter(t => t.status === "In Progress").length;
-    const review = activeTasks.filter(t => t.status === "Review").length;
-    const done = activeTasks.filter(t => t.status === "Done").length;
-    const total = activeTasks.length || 1;
-
+    const t = active.length || 1;
     return [
-      { name: "To Do", count: todo, pct: Math.round((todo / total) * 100), color: "#94a3b8" },
-      { name: "In Progress", count: progress, pct: Math.round((progress / total) * 100), color: "#6366f1" },
-      { name: "Review", count: review, pct: Math.round((review / total) * 100), color: "#fbbf24" },
-      { name: "Done", count: done, pct: Math.round((done / total) * 100), color: "#10b981" }
-    ];
-  }, [activeTasks]);
+      { name: "To Do", count: active.filter((x) => x.status === "To Do").length, color: "#A0A0A0" },
+      { name: "In Progress", count: active.filter((x) => x.status === "In Progress").length, color: "#0038BC" },
+      { name: "Review", count: active.filter((x) => x.status === "Review").length, color: "#EF8F00" },
+      { name: "Done", count: active.filter((x) => x.status === "Done").length, color: "#22c55e" },
+    ].map((s) => ({ ...s, pct: Math.round((s.count / t) * 100) }));
+  }, [active]);
 
-  // Category Distribution
-  const categoryData = useMemo(() => {
-    const counts: { [cat: string]: number } = {};
-    activeTasks.forEach(t => {
-      counts[t.category] = (counts[t.category] || 0) + 1;
+  const burndown = useMemo(() => {
+    let start = project.startDate ? new Date(project.startDate) : new Date();
+    let end = project.endDate ? new Date(project.endDate) : new Date(Date.now() + 14 * 86400000);
+    if (isNaN(start.getTime())) start = new Date();
+    if (isNaN(end.getTime())) end = new Date(Date.now() + 14 * 86400000);
+    let days = Math.ceil((end.getTime() - start.getTime()) / 86400000);
+    if (days <= 0) days = 14;
+    if (days > 45) days = 45;
+    const tot = active.reduce((s, t) => s + (t.estimatedHours ?? 0), 0);
+    return Array.from({ length: days + 1 }, (_, i) => {
+      const date = new Date(start.getTime() + i * 86400000).toISOString().split("T")[0];
+      const ideal = parseFloat((tot * (1 - i / days)).toFixed(1));
+      let actual = tot;
+      active.forEach((t) => { if (t.status === "Done" && t.dueDate && t.dueDate <= date) actual -= (t.estimatedHours ?? 0); });
+      return { i, date, ideal: Math.max(0, ideal), actual: Math.max(0, actual) };
     });
-    const total = activeTasks.length || 1;
-    return Object.keys(counts).map(cat => ({
-      category: cat,
-      count: counts[cat],
-      pct: Math.round((counts[cat] / total) * 100)
-    })).sort((a, b) => b.count - a.count);
-  }, [activeTasks]);
+  }, [project, active]);
 
-  // Resource / Assignee Workload Balance Analyzer
-  const memberWorkloads = useMemo(() => {
-    return users.map(user => {
-      // Find tasks where this user is assigned
-      const assigned = activeTasks.filter(t => 
-        t.assignees.some(asg => asg.userId === user.id)
-      );
+  const burnSvg = useMemo(() => {
+    if (!burndown.length) return null;
+    const W = 560, H = 240, P = 36;
+    const maxH = Math.max(kpis.est || 10, ...burndown.map((d) => d.ideal));
+    const gx = (i: number) => P + (i / (burndown.length - 1)) * (W - 2 * P);
+    const gy = (h: number) => H - P - (h / maxH) * (H - 2 * P);
+    const ideal = burndown.map((d, i) => `${i === 0 ? "M" : "L"}${gx(i)} ${gy(d.ideal)}`).join(" ");
+    const actual = burndown.map((d, i) => `${i === 0 ? "M" : "L"}${gx(i)} ${gy(d.actual)}`).join(" ");
+    const grids = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(maxH * f));
+    return { W, H, P, gx, gy, ideal, actual, grids, maxH };
+  }, [burndown, kpis.est]);
 
-      const tasksCount = assigned.length;
-      const completedCount = assigned.filter(t => t.status === "Done").length;
-      const completeRatio = tasksCount > 0 ? Math.round((completedCount / tasksCount) * 100) : 0;
-      
-      const estimatedHours = assigned.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-      const loggedHours = assigned.reduce((sum, t) => {
-        return sum + t.timeLogs.reduce((acc, log) => acc + log.hours, 0);
-      }, 0);
+  const workloads = useMemo(() =>
+    users.map((u) => {
+      const mine = active.filter((t) => t.assignees.some((a) => a.userId === u.id));
+      const done = mine.filter((t) => t.status === "Done").length;
+      const est = mine.reduce((s, t) => s + (t.estimatedHours ?? 0), 0);
+      const log = mine.reduce((s, t) => s + t.timeLogs.reduce((a, l) => a + l.hours, 0), 0);
+      return { user: u, count: mine.length, donePct: mine.length > 0 ? Math.round((done / mine.length) * 100) : 0, est, log, overloaded: est >= 30 };
+    }).sort((a, b) => b.est - a.est),
+    [users, active]);
 
-      const isOverloaded = estimatedHours >= 30; // standard 30h capacity limit per sprint
+  const catData = useMemo(() => {
+    const map: Record<string, number> = {};
+    active.forEach((t) => { map[t.category] = (map[t.category] ?? 0) + 1; });
+    const tot = active.length || 1;
+    return Object.entries(map).map(([cat, n]) => ({ cat, n, pct: Math.round((n / tot) * 100) })).sort((a, b) => b.n - a.n);
+  }, [active]);
 
-      return {
-        user,
-        tasksCount,
-        completeRatio,
-        estimatedHours,
-        loggedHours,
-        isOverloaded
-      };
-    }).sort((a, b) => b.estimatedHours - a.estimatedHours);
-  }, [users, activeTasks]);
+  const kpiCards = [
+    { label: "Completion", value: `${kpis.pct}%`, sub: `${kpis.done}/${kpis.total} tasks`, icon: Zap, accent: false },
+    { label: "Est. hours", value: `${kpis.est}h`, sub: `${kpis.logged}h logged`, icon: Clock, accent: false },
+    { label: "Overdue", value: `${kpis.overdue}`, sub: "Past deadline", icon: ShieldAlert, accent: kpis.overdue > 0 },
+    { label: "Velocity", value: `${kpis.velocity}h/d`, sub: "Avg daily rate", icon: RefreshCw, accent: false },
+  ];
 
-  // Compute Agile burndown datasets over project scope (ideal line vs. actual remaining hours)
-  const burndownData = useMemo(() => {
-    let start = project.startDate ? new Date(project.startDate) : null;
-    let end = project.endDate ? new Date(project.endDate) : null;
-
-    if (!start || isNaN(start.getTime())) {
-      start = new Date();
-      start.setDate(start.getDate() - 2);
-    }
-    if (!end || isNaN(end.getTime())) {
-      end = new Date(start.getTime() + 14 * 24 * 60 * 60 * 1000);
-    }
-
-    const diffMs = end.getTime() - start.getTime();
-    let daysDiff = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-    if (daysDiff <= 0) daysDiff = 14;
-    if (daysDiff > 45) daysDiff = 45; // clamp for clean graphing
-
-    const totalEstimatedHours = activeTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-
-    const data: {
-      dayIndex: number;
-      dateStr: string;
-      idealHoursRemaining: number;
-      actualHoursRemaining: number;
-    }[] = [];
-
-    for (let i = 0; i <= daysDiff; i++) {
-      const currentDay = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
-      const curDayStr = currentDay.toISOString().split("T")[0];
-
-      // Ideal straight trajectory line calculation
-      const ideal = Math.max(0, parseFloat((totalEstimatedHours * (1 - i / daysDiff)).toFixed(1)));
-
-      // Actual calculation: remaining estimate sum of incomplete tasks on/before this day
-      // A task is considered "complete" at the due date if it is Done
-      let actual = totalEstimatedHours;
-      activeTasks.forEach(t => {
-        if (t.status === "Done") {
-          // If task was completed (due date parsed) on or before this index day, reduce the balance
-          if (t.dueDate && t.dueDate <= curDayStr) {
-            actual -= (t.estimatedHours || 0);
-          }
-        }
-      });
-
-      // Clamp actual hours remaining above zero
-      if (actual < 0) actual = 0;
-
-      // Adjust trend so actual is flat or falling
-      if (i === daysDiff && activeTasks.filter(t => t.status !== "Done").length === 0) {
-        actual = 0;
-      }
-
-      data.push({
-        dayIndex: i,
-        dateStr: curDayStr,
-        idealHoursRemaining: ideal,
-        actualHoursRemaining: actual
-      });
-    }
-
-    return data;
-  }, [project.startDate, project.endDate, activeTasks]);
-
-  // Construct SVG parameters for the Burndown chart dynamically
-  const burndownChartSvg = useMemo(() => {
-    if (burndownData.length === 0) return null;
-    
-    const width = 640;
-    const height = 280;
-    const padding = 40;
-
-    const maxHours = Math.max(kpis.totalEstimate || 10, ...burndownData.map(d => Math.max(d.idealHoursRemaining, d.actualHoursRemaining)));
-    const length = burndownData.length;
-
-    // Scaling helpers
-    const getX = (index: number) => padding + (index / (length - 1)) * (width - 2 * padding);
-    const getY = (hours: number) => height - padding - (hours / maxHours) * (height - 2 * padding);
-
-    // Create Ideal Line Path
-    let idealPath = "";
-    burndownData.forEach((d, idx) => {
-      const x = getX(d.dayIndex);
-      const y = getY(d.idealHoursRemaining);
-      idealPath += `${idx === 0 ? "M" : "L"} ${x} ${y}`;
-    });
-
-    // Create Actual Line Path
-    let actualPath = "";
-    burndownData.forEach((d, idx) => {
-      const x = getX(d.dayIndex);
-      const y = getY(d.actualHoursRemaining);
-      actualPath += `${idx === 0 ? "M" : "L"} ${x} ${y}`;
-    });
-
-    // Generate grid line y-values
-    const gridY: number[] = [];
-    const step = maxHours / 4;
-    for (let i = 0; i <= 4; i++) {
-      gridY.push(parseFloat((i * step).toFixed(0)));
-    }
-
-    return {
-      width,
-      height,
-      padding,
-      idealPath,
-      actualPath,
-      getX,
-      getY,
-      gridY,
-      maxHours
-    };
-  }, [burndownData, kpis.totalEstimate]);
+  const TABS = [
+    { id: "burndown" as const, label: "Burndown", icon: TrendingDown },
+    { id: "workload" as const, label: "Workload", icon: Users },
+    { id: "breakout" as const, label: "Distribution", icon: BarChart4 },
+  ];
 
   return (
-    <div className="space-y-6">
-      
-      {/* 4-KPI Overview Panels row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-2xs flex items-center space-x-4">
-          <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-600 shrink-0">
-            <Zap className="w-5 h-5" />
+    <div className="space-y-5">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {kpiCards.map(({ label, value, sub, icon: Icon, accent }) => (
+          <div key={label} className="bg-white border border-[#E8E8E8] rounded-xl p-4">
+            <div className="flex items-start justify-between mb-3">
+              <p className="text-sm text-[#737373]">{label}</p>
+              <div className={`p-2 rounded-lg ${accent ? "bg-[#fef3dc]" : "bg-[#e8edfb]"}`}>
+                <Icon className={`w-4 h-4 ${accent ? "text-[#EF8F00]" : "text-[#0038BC]"}`} />
+              </div>
+            </div>
+            <p className={`text-2xl font-bold ${accent && kpis.overdue > 0 ? "text-red-600" : "text-[#111111]"}`}>{value}</p>
+            <p className="text-xs text-[#A0A0A0] mt-1">{sub}</p>
           </div>
-          <div>
-            <span className="block text-[10px] font-bold font-mono uppercase tracking-wider text-slate-400">Completion rate</span>
-            <span className="text-xl md:text-2xl font-black text-slate-800 leading-tight block mt-0.5">{kpis.completePercentage}%</span>
-            <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">{kpis.completedCount} / {kpis.totalCount} completed</span>
-          </div>
-        </div>
-
-        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-2xs flex items-center space-x-4">
-          <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl text-emerald-600 shrink-0">
-            <Clock className="w-5 h-5" />
-          </div>
-          <div>
-            <span className="block text-[10px] font-bold font-mono uppercase tracking-wider text-slate-400">Total volume</span>
-            <span className="text-xl md:text-2xl font-black text-slate-800 leading-tight block mt-0.5">{kpis.totalEstimate}h</span>
-            <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">{kpis.totalLogged}h actual log written</span>
-          </div>
-        </div>
-
-        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-2xs flex items-center space-x-4">
-          <div className="p-3 bg-amber-50 border border-amber-100 rounded-xl text-amber-500 shrink-0">
-            <ShieldAlert className="w-5 h-5 animate-pulse" />
-          </div>
-          <div>
-            <span className="block text-[10px] font-bold font-mono uppercase tracking-wider text-slate-400">Overdue items</span>
-            <span className={`text-xl md:text-2xl font-black leading-tight block mt-0.5 ${kpis.overdueCount > 0 ? "text-pink-650" : "text-slate-800"}`}>
-              {kpis.overdueCount} Items
-            </span>
-            <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">Slipped past planned deadline</span>
-          </div>
-        </div>
-
-        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-2xs flex items-center space-x-4">
-          <div className="p-3 bg-sky-50 border border-sky-100 rounded-xl text-sky-600 shrink-0">
-            <RefreshCw className="w-5 h-5" />
-          </div>
-          <div>
-            <span className="block text-[10px] font-bold font-mono uppercase tracking-wider text-slate-400">Burn velocity</span>
-            <span className="text-xl md:text-2xl font-black text-slate-800 leading-tight block mt-0.5">{kpis.velocityPerDay}h/day</span>
-            <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">Average logged effort rate</span>
-          </div>
-        </div>
+        ))}
       </div>
 
-      {/* Main interactive Tab controller */}
-      <div className="bg-white border border-slate-200/80 rounded-2xl shadow-xs overflow-hidden">
-        
-        {/* Navigation bar */}
-        <div className="flex border-b border-slate-150 bg-slate-50 p-1.5 space-x-1 overflow-x-auto max-w-full">
-          <button
-            onClick={() => setActiveMetricTab("burndown")}
-            className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all inline-flex items-center space-x-1.5 font-display ${
-              activeMetricTab === "burndown"
-                ? "bg-white text-indigo-700 shadow-2xs font-extrabold border border-slate-200"
-                : "text-slate-500 hover:bg-slate-100"
-            }`}
-          >
-            <TrendingDown className="w-4 h-4" />
-            <span>Burndown trajectory</span>
-          </button>
-          
-          <button
-            onClick={() => setActiveMetricTab("workload")}
-            className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all inline-flex items-center space-x-1.5 font-display ${
-              activeMetricTab === "workload"
-                ? "bg-white text-indigo-700 shadow-2xs font-extrabold border border-slate-200"
-                : "text-slate-500 hover:bg-slate-100"
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            <span>Resource balance workloads</span>
-          </button>
-
-          <button
-            onClick={() => setActiveMetricTab("breakout")}
-            className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all inline-flex items-center space-x-1.5 font-display ${
-              activeMetricTab === "breakout"
-                ? "bg-white text-indigo-700 shadow-2xs font-extrabold border border-slate-200"
-                : "text-slate-500 hover:bg-slate-100"
-            }`}
-          >
-            <BarChart4 className="w-4 h-4" />
-            <span>Status distribution</span>
-          </button>
+      {/* Tabs */}
+      <div className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden">
+        <div className="flex border-b border-[#E8E8E8] px-4 pt-3 gap-1">
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <button key={id} onClick={() => setTab(id)}
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-lg transition-colors -mb-px border-b-2 ${tab === id ? "border-[#0038BC] text-[#0038BC] font-semibold" : "border-transparent text-[#737373] hover:text-[#111111]"}`}>
+              <Icon className="w-4 h-4" />
+              {label}
+            </button>
+          ))}
         </div>
 
-        {/* Content body based on active tabs */}
-        <div className="p-6">
-          
-          {/* Burndown траектория */}
-          {activeMetricTab === "burndown" && burndownChartSvg && (
-            <div className="space-y-6">
-              <div className="flex justify-between items-start">
+        <div className="p-5">
+          {/* Burndown */}
+          {tab === "burndown" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
                 <div>
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-display">Sprint Burndown Timeline</h4>
-                  <p className="text-slate-400 text-[10px] mt-0.5">Compares planned ideal task effort expenditure vs actual board completions</p>
+                  <p className="text-sm font-semibold text-[#111111]">Sprint Burndown</p>
+                  <p className="text-xs text-[#737373] mt-0.5">Ideal vs actual remaining hours</p>
                 </div>
-                <div className="text-[10px] font-mono font-bold flex items-center space-x-4">
-                  <div className="flex items-center space-x-1.5">
-                    <div className="w-3 h-0.5 border-t-2 border-slate-300 border-dashed" />
-                    <span>Ideal Burndown Trajectory</span>
-                  </div>
-                  <div className="flex items-center space-x-1.5">
-                    <div className="w-3 h-1 bg-indigo-500 rounded" />
-                    <span>Actual Remaining Estimate</span>
-                  </div>
+                <div className="flex items-center gap-4 text-xs text-[#737373]">
+                  <span className="flex items-center gap-1.5"><span className="w-6 border-t-2 border-dashed border-[#D0D0D0] inline-block" /> Ideal</span>
+                  <span className="flex items-center gap-1.5"><span className="w-6 h-1.5 bg-[#0038BC] rounded inline-block" /> Actual</span>
                 </div>
               </div>
 
-              {kpis.totalEstimate === 0 ? (
-                <div className="py-12 text-center text-slate-400 italic text-xs">
-                  Provide estimated hours on tasks sheets to populate remaining burndown charts.
-                </div>
-              ) : (
-                <div className="relative border border-slate-150 rounded-xl p-3 bg-slate-50/50 flex justify-center">
-                  <svg 
-                    viewBox={`0 0 ${burndownChartSvg.width} ${burndownChartSvg.height}`} 
-                    className="w-full max-w-4xl h-auto"
-                  >
-                    {/* Grid horizontal guidelines */}
-                    {burndownChartSvg.gridY.map((hours, idx) => {
-                      const y = burndownChartSvg.getY(hours);
-                      return (
-                        <g key={`guide-${idx}`}>
-                          <line 
-                            x1={burndownChartSvg.padding} 
-                            y1={y} 
-                            x2={burndownChartSvg.width - burndownChartSvg.padding} 
-                            y2={y} 
-                            stroke="#e2e8f0" 
-                            strokeWidth="1" 
-                          />
-                          <text 
-                            x={burndownChartSvg.padding - 8} 
-                            y={y + 3} 
-                            fill="#94a3b8" 
-                            fontSize="9" 
-                            fontFamily="monospace"
-                            fontWeight="bold"
-                            textAnchor="end"
-                          >
-                            {hours}h
-                          </text>
-                        </g>
-                      );
-                    })}
-
-                    {/* Timeline Vertical grid tick helpers */}
-                    {burndownData.map((d, idx) => {
-                      const x = burndownChartSvg.getX(idx);
-                      // Only show labels occasionally for clean reading
-                      const showLabel = idx === 0 || idx === burndownData.length - 1 || idx % 7 === 0;
-                      return (
-                        <g key={`v-grid-${idx}`}>
-                          {idx !== 0 && idx !== burndownData.length - 1 && (
-                            <line 
-                              x1={x} 
-                              y1={burndownChartSvg.padding} 
-                              x2={x} 
-                              y2={burndownChartSvg.height - burndownChartSvg.padding} 
-                              stroke="#f1f5f9" 
-                              strokeWidth="1" 
-                            />
-                          )}
-                          {showLabel && (
-                            <text 
-                              x={x} 
-                              y={burndownChartSvg.height - burndownChartSvg.padding + 14} 
-                              fill="#94a3b8" 
-                              fontSize="8" 
-                              fontFamily="monospace"
-                              fontWeight="bold"
-                              textAnchor="middle"
-                            >
-                              Day {idx}
-                            </text>
-                          )}
-                        </g>
-                      );
-                    })}
-
-                    {/* Path: Ideal trajectory dashed */}
-                    <path
-                      d={burndownChartSvg.idealPath}
-                      fill="none"
-                      stroke="#cbd5e1"
-                      strokeWidth="2"
-                      strokeDasharray="4 4"
-                    />
-
-                    {/* Path: Actual Remaining hours */}
-                    <path
-                      d={burndownChartSvg.actualPath}
-                      fill="none"
-                      stroke="#6366f1"
-                      strokeWidth="3.5"
-                      strokeLinecap="round"
-                    />
-
-                    {/* Hover Hotspot Circles for interaction */}
-                    {burndownData.map((d, idx) => {
-                      const x = burndownChartSvg.getX(idx);
-                      const yIdeal = burndownChartSvg.getY(d.idealHoursRemaining);
-                      const yActual = burndownChartSvg.getY(d.actualHoursRemaining);
-
-                      return (
-                        <g 
-                          key={`hotspot-${idx}`}
-                          onMouseEnter={() => setBurndownHoverIndex(idx)}
-                          onMouseLeave={() => setBurndownHoverIndex(null)}
-                          className="cursor-pointer"
-                        >
-                          {/* Ideal node circle */}
-                          <circle 
-                            cx={x} 
-                            cy={yActual} 
-                            r={burndownHoverIndex === idx ? "7" : "3.5"} 
-                            fill="#6366f1" 
-                            stroke="white" 
-                            strokeWidth="1.5" 
-                            className="transition-all duration-100"
-                          />
-                        </g>
-                      );
-                    })}
+              {kpis.est === 0 ? (
+                <p className="text-sm text-[#A0A0A0] py-10 text-center">Add estimated hours to tasks to see the burndown chart.</p>
+              ) : burnSvg && (
+                <div className="relative border border-[#E8E8E8] rounded-lg bg-[#F7F8FA] p-2">
+                  <svg viewBox={`0 0 ${burnSvg.W} ${burnSvg.H}`} className="w-full h-auto">
+                    {burnSvg.grids.map((h, i) => (
+                      <g key={i}>
+                        <line x1={burnSvg.P} y1={burnSvg.gy(h)} x2={burnSvg.W - burnSvg.P} y2={burnSvg.gy(h)} stroke="#E8E8E8" strokeWidth="1" />
+                        <text x={burnSvg.P - 6} y={burnSvg.gy(h) + 4} fill="#A0A0A0" fontSize="10" textAnchor="end">{h}h</text>
+                      </g>
+                    ))}
+                    <path d={burnSvg.ideal} fill="none" stroke="#D0D0D0" strokeWidth="1.5" strokeDasharray="4 3" />
+                    <path d={burnSvg.actual} fill="none" stroke="#0038BC" strokeWidth="2.5" strokeLinecap="round" />
+                    {burndown.map((d, i) => (
+                      <circle key={i} cx={burnSvg.gx(i)} cy={burnSvg.gy(d.actual)} r={hoverIdx === i ? 6 : 3}
+                        fill="#0038BC" stroke="white" strokeWidth="1.5"
+                        className="cursor-pointer transition-all"
+                        onMouseEnter={() => setHoverIdx(i)} onMouseLeave={() => setHoverIdx(null)} />
+                    ))}
                   </svg>
-
-                  {/* Tooltip detail element */}
-                  {burndownHoverIndex !== null && burndownData[burndownHoverIndex] && (
-                    <div className="absolute top-4 left-6 bg-slate-900 text-white rounded-lg p-2.5 shadow-xl border border-slate-700 text-[10px] font-mono leading-relaxed space-y-0.5 max-w-xs block scale-in duration-100 pointer-events-none">
-                      <p className="font-bold text-slate-350 uppercase">Burn progress index:</p>
-                      <p className="font-sans font-extrabold text-[#9da5fc] text-[11px]">Sprint Day {burndownHoverIndex} ({burndownData[burndownHoverIndex].dateStr})</p>
-                      <div className="pt-1 mt-1 border-t border-slate-700 space-y-0.5 font-bold">
-                        <p>Planned trajectory: <span className="text-white">{burndownData[burndownHoverIndex].idealHoursRemaining}h</span></p>
-                        <p>Actual outstanding: <span className="text-emerald-400">{burndownData[burndownHoverIndex].actualHoursRemaining}h</span></p>
-                      </div>
+                  {hoverIdx !== null && burndown[hoverIdx] && (
+                    <div className="absolute top-3 left-10 bg-[#111111] text-white text-xs rounded-lg px-3 py-2 pointer-events-none space-y-0.5">
+                      <p className="font-medium">Day {hoverIdx} · {burndown[hoverIdx].date}</p>
+                      <p>Ideal: <span className="text-[#D0D0D0]">{burndown[hoverIdx].ideal}h</span></p>
+                      <p>Actual: <span className="text-green-400">{burndown[hoverIdx].actual}h</span></p>
                     </div>
                   )}
                 </div>
@@ -495,78 +175,38 @@ export function ProjectSprintAnalytics({ tasks, users, project }: ProjectSprintA
             </div>
           )}
 
-          {/* Resource Workload Balance charts list */}
-          {activeMetricTab === "workload" && (
-            <div className="space-y-6">
-              <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-display">Squad allocation workloads</h4>
-                <p className="text-slate-400 text-[10px] mt-0.5">Track estimated hours volume per assignee. Caps recommended at 30h to prevent burnouts.</p>
-              </div>
-
-              {memberWorkloads.length === 0 ? (
-                <p className="text-xs text-slate-405 italic">No approved system project participants available to load.</p>
-              ) : (
-                <div className="space-y-4">
-                  {memberWorkloads.map(({ user, tasksCount, completeRatio, estimatedHours, loggedHours, isOverloaded }) => (
-                    <div key={user.id} className={`p-4 rounded-2xl border transition-all ${
-                      isOverloaded ? "bg-red-50/20 border-red-200" : "bg-slate-50/50 border-slate-200/50 hover:bg-slate-50"
-                    }`}>
-                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                        {/* Name circle */}
-                        <div className="flex items-center space-x-3 pr-2">
-                          <div className={`w-8 h-8 rounded-full border text-slate-700 flex items-center justify-center font-bold text-xs uppercase shrink-0 shadow-2xs ${
-                            isOverloaded ? "bg-red-100 border-red-300 text-red-700" : "bg-indigo-50 border-slate-300"
-                          }`}>
+          {/* Workload */}
+          {tab === "workload" && (
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-[#111111]">Team Workload</p>
+              <p className="text-xs text-[#737373]">Estimated hours per member. Over 30h may indicate overload.</p>
+              {workloads.length === 0 ? <p className="text-sm text-[#A0A0A0]">No team members found.</p> : (
+                <div className="space-y-3 mt-3">
+                  {workloads.map(({ user, count, donePct, est, log, overloaded }) => (
+                    <div key={user.id} className={`p-4 rounded-xl border ${overloaded ? "border-red-200 bg-red-50/30" : "border-[#E8E8E8] bg-[#F7F8FA]"}`}>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${overloaded ? "bg-red-100 text-red-700" : "bg-[#e8edfb] text-[#0038BC]"}`}>
                             {user.name.charAt(0)}
                           </div>
                           <div>
-                            <span className="block text-xs font-bold text-slate-805">{user.name}</span>
-                            <span className="text-[9.5px] font-mono text-slate-400 uppercase tracking-wide">
-                              Role: {user.role} / Team ID: {user.teamId || "No team link"}
-                            </span>
+                            <p className="text-sm font-semibold text-[#111111]">{user.name}</p>
+                            <p className="text-xs text-[#737373]">{user.role}</p>
                           </div>
                         </div>
-
-                        {/* Overload badge flag */}
-                        {isOverloaded && (
-                          <div className="px-2.5 py-0.5 rounded-full border border-pink-200 bg-pink-100 text-[9px] font-mono font-bold text-pink-700 uppercase animate-bounce mt-1 shrink-0 flex items-center space-x-1">
-                            <ShieldAlert className="w-3.5 h-3.5" />
-                            <span>Sprint Overloaded (30h Limit)</span>
-                          </div>
-                        )}
-
-                        {/* Mini workload numeric gauges */}
-                        <div className="flex items-center space-x-6 text-[10px] font-mono uppercase text-slate-500 font-bold">
-                          <div>
-                            <span className="block text-slate-400 text-[9px]">Sheets</span>
-                            <span className="text-slate-800 text-xs font-black">{tasksCount} linked</span>
-                          </div>
-                          <div>
-                            <span className="block text-slate-400 text-[9px]">Scope estimate</span>
-                            <span className={`text-xs font-black ${isOverloaded ? "text-red-655" : "text-slate-800"}`}>
-                              {estimatedHours} hours
-                            </span>
-                          </div>
-                          <div>
-                            <span className="block text-slate-400 text-[9px]">Logged code</span>
-                            <span className="text-slate-800 text-xs font-black">{loggedHours} hours</span>
-                          </div>
+                        <div className="flex items-center gap-4 text-xs text-[#737373]">
+                          <span>{count} tasks</span>
+                          <span className={overloaded ? "text-red-600 font-semibold" : ""}>{est}h est.</span>
+                          <span>{log}h logged</span>
+                          {overloaded && <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">Overloaded</span>}
                         </div>
                       </div>
-
-                      {/* Bar workload visuals */}
-                      <div className="mt-3.5 space-y-1.5 select-none">
-                        <div className="flex justify-between items-center text-[9px] font-mono font-extrabold text-slate-450 uppercase">
-                          <span>Sprint Progress Completion Percentage</span>
-                          <span>{completeRatio}% done</span>
+                      <div>
+                        <div className="flex justify-between text-xs text-[#737373] mb-1">
+                          <span>Progress</span><span>{donePct}%</span>
                         </div>
-                        <div className="w-full bg-slate-200/60 rounded-full h-2 overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-300 ${
-                              isOverloaded ? "bg-pink-500" : "bg-theme-teal"
-                            }`}
-                            style={{ width: `${completeRatio}%` }}
-                          />
+                        <div className="w-full h-1.5 bg-[#EEEEEE] rounded-full">
+                          <div className={`h-full rounded-full ${overloaded ? "bg-red-500" : "bg-[#0038BC]"}`} style={{ width: `${donePct}%` }} />
                         </div>
                       </div>
                     </div>
@@ -576,73 +216,50 @@ export function ProjectSprintAnalytics({ tasks, users, project }: ProjectSprintA
             </div>
           )}
 
-          {/* Breakout Data panels list */}
-          {activeMetricTab === "breakout" && (
+          {/* Breakout */}
+          {tab === "breakout" && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              
-              {/* Lane ratios */}
-              <div className="space-y-4">
-                <div>
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-display">Lanes progress distribution</h4>
-                  <p className="text-slate-450 text-[10.1px]">Status lane counts indicating current board bottleneck positions</p>
-                </div>
-
-                <div className="space-y-3 pt-2">
-                  {statusData.map((lane) => (
-                    <div key={lane.name} className="space-y-1 text-xs">
-                      <div className="flex justify-between font-bold text-slate-700">
-                        <span className="flex items-center space-x-1.5">
-                          <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: lane.color }} />
-                          <span>{lane.name}</span>
+              <div>
+                <p className="text-sm font-semibold text-[#111111] mb-3">Status breakdown</p>
+                <div className="space-y-3">
+                  {statusData.map((s) => (
+                    <div key={s.name}>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: s.color }} />
+                          {s.name}
                         </span>
-                        <span>{lane.count} ({lane.pct}%)</span>
+                        <span className="text-[#737373]">{s.count} ({s.pct}%)</span>
                       </div>
-                      <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                        <div 
-                          className="h-full rounded-full transition-all duration-300"
-                          style={{ width: `${lane.pct}%`, backgroundColor: lane.color }}
-                        />
+                      <div className="h-1.5 bg-[#EEEEEE] rounded-full">
+                        <div className="h-full rounded-full" style={{ width: `${s.pct}%`, backgroundColor: s.color }} />
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-
-              {/* Category charts listing */}
-              <div className="space-y-4 border-t md:border-t-0 md:border-l border-slate-150 pt-4 md:pt-0 md:pl-8">
-                <div>
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-display">Workforce categories breakdown</h4>
-                  <p className="text-slate-450 text-[10.1px]">Task counts categorizing workforce assignments</p>
-                </div>
-
-                {categoryData.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic">No tasks categorized yet.</p>
-                ) : (
-                  <div className="space-y-3 pt-2.5">
-                    {categoryData.map((catObj) => (
-                      <div key={catObj.category} className="space-y-1 text-xs">
-                        <div className="flex justify-between font-bold text-slate-700 uppercase">
-                          <span>{catObj.category}</span>
-                          <span>{catObj.count} ({catObj.pct}%)</span>
+              <div className="border-t md:border-t-0 md:border-l border-[#E8E8E8] pt-4 md:pt-0 md:pl-8">
+                <p className="text-sm font-semibold text-[#111111] mb-3">By category</p>
+                {catData.length === 0 ? <p className="text-sm text-[#A0A0A0]">No tasks yet.</p> : (
+                  <div className="space-y-3">
+                    {catData.map(({ cat, n, pct }) => (
+                      <div key={cat}>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span>{cat}</span>
+                          <span className="text-[#737373]">{n} ({pct}%)</span>
                         </div>
-                        <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                          <div 
-                            className="h-full bg-indigo-400 rounded-full transition-all duration-300"
-                            style={{ width: `${catObj.pct}%` }}
-                          />
+                        <div className="h-1.5 bg-[#EEEEEE] rounded-full">
+                          <div className="h-full bg-[#0038BC] rounded-full" style={{ width: `${pct}%` }} />
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
               </div>
-
             </div>
           )}
-
         </div>
       </div>
-
     </div>
   );
 }

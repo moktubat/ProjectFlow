@@ -1,183 +1,94 @@
 import React, { useEffect, useState } from "react";
 import { useUIStore } from "../store/ui-store.js";
 import { Activity } from "../types/index.js";
-import { 
-  PlusCircle, 
-  RefreshCw, 
-  CheckSquare, 
-  GitCommit, 
-  Trash, 
-  MessageSquare, 
-  Paperclip, 
-  Clock, 
-  User,
-  ArrowRight
-} from "lucide-react";
+import { PlusCircle, RefreshCw, CheckSquare, GitCommit, Trash2, MessageSquare, Paperclip, ArrowRight } from "lucide-react";
 
-interface ActivityStreamProps {
-  projectId: string;
-}
+const ACTION_META: Record<string, { icon: React.ElementType; color: string }> = {
+  project_created: { icon: PlusCircle, color: "text-green-600 bg-green-50" },
+  project_updated: { icon: RefreshCw, color: "text-blue-600 bg-blue-50" },
+  task_created: { icon: CheckSquare, color: "text-[#0038BC] bg-[#e8edfb]" },
+  task_moved: { icon: ArrowRight, color: "text-indigo-600 bg-indigo-50" },
+  task_trashed: { icon: Trash2, color: "text-red-600 bg-red-50" },
+  project_trashed: { icon: Trash2, color: "text-red-600 bg-red-50" },
+  comment_added: { icon: MessageSquare, color: "text-[#EF8F00] bg-[#fef3dc]" },
+  file_uploaded: { icon: Paperclip, color: "text-teal-600 bg-teal-50" },
+};
 
-export function ActivityStream({ projectId }: ActivityStreamProps) {
-  const token = useUIStore((state) => state.token);
+export function ActivityStream({ projectId }: { projectId: string }) {
+  const token = useUIStore((s) => s.token);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchActivities = async (isPoll = false) => {
+  const fetchActivities = async (silent = false) => {
     if (!token || !projectId) return;
-    if (!isPoll) {
-      setIsLoading(true);
-      setError(null);
-    }
+    if (!silent) { setIsLoading(true); setError(null); }
     try {
-      const res = await fetch(`/api/projects/${projectId}/activities`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setActivities(data || []);
-      } else if (!isPoll) {
-        const err = await res.json();
-        setError(err.error || "Failed to load project activity stream");
-      }
-    } catch (err) {
-      if (!isPoll) {
-        setError("Failed to fetch activity logs.");
-      }
-    } finally {
-      if (!isPoll) {
-        setIsLoading(false);
-      }
-    }
+      const res = await fetch(`/api/projects/${projectId}/activities`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setActivities(await res.json());
+      else if (!silent) setError("Failed to load activity.");
+    } catch { if (!silent) setError("Network error."); }
+    finally { if (!silent) setIsLoading(false); }
   };
 
   useEffect(() => {
-    fetchActivities(false);
-    const interval = setInterval(() => {
-      fetchActivities(true);
-    }, 12000); // Poll every 12s for newly minted collaborative actions
-    return () => clearInterval(interval);
+    fetchActivities();
+    const iv = setInterval(() => fetchActivities(true), 12000);
+    return () => clearInterval(iv);
   }, [projectId, token]);
 
-  const getActivityIcon = (action: string) => {
-    switch (action) {
-      case "project_created":
-        return {
-          icon: PlusCircle,
-          bg: "bg-[#DAE9C6]",
-          text: "text-slate-800"
-        };
-      case "project_updated":
-        return {
-          icon: RefreshCw,
-          bg: "bg-[#FFF6F2]",
-          text: "text-[#3B62AB]"
-        };
-      case "task_created":
-        return {
-          icon: CheckSquare,
-          bg: "bg-[#FFF6F2]",
-          text: "text-[#3B62AB]"
-        };
-      case "task_moved":
-        return {
-          icon: ArrowRight,
-          bg: "bg-indigo-50",
-          text: "text-indigo-600"
-        };
-      case "task_trashed":
-      case "project_trashed":
-        return {
-          icon: Trash,
-          bg: "bg-red-50",
-          text: "text-red-500"
-        };
-      case "comment_added":
-        return {
-          icon: MessageSquare,
-          bg: "bg-[#FFF6F2]",
-          text: "text-[#3B62AB]"
-        };
-      case "file_uploaded":
-        return {
-          icon: Paperclip,
-          bg: "bg-teal-50",
-          text: "text-teal-600"
-        };
-      default:
-        return {
-          icon: GitCommit,
-          bg: "bg-slate-100",
-          text: "text-slate-500"
-        };
-    }
-  };
-
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
         <div>
-          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono">Live Workspace Change Audit</h4>
-          <p className="text-[10px] text-slate-400 mt-0.5">Real-time changelog tracking collaborative engineering actions</p>
+          <p className="text-sm font-semibold text-[#111111]">Activity</p>
+          <p className="text-xs text-[#737373] mt-0.5">Recent changes in this project</p>
         </div>
         <button
-          onClick={() => fetchActivities(false)}
+          onClick={() => fetchActivities()}
           disabled={isLoading}
-          className="p-1 px-2.5 rounded-lg border border-slate-200/60 hover:bg-slate-50 transition-colors text-[10px] font-mono font-bold inline-flex items-center space-x-1 text-slate-500 active:scale-95 duration-100"
+          className="flex items-center gap-1.5 text-xs text-[#737373] hover:text-[#111111] px-2.5 py-1.5 rounded-lg border border-[#E8E8E8] hover:bg-[#F4F4F4] transition-colors"
         >
-          <RefreshCw className={`w-3 h-3 ${isLoading ? "animate-spin text-[#3B62AB]" : ""}`} />
-          <span>Sync</span>
+          <RefreshCw className={`w-3 h-3 ${isLoading ? "animate-spin" : ""}`} />
+          Refresh
         </button>
       </div>
 
       {isLoading ? (
-        <div className="py-12 text-center text-xs text-slate-400 font-medium space-y-2">
-          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-[#3B62AB] mx-auto" />
-          <span>Synchronizing timeline...</span>
+        <div className="flex justify-center py-10">
+          <div className="w-6 h-6 border-2 border-[#0038BC] border-t-transparent rounded-full animate-spin" />
         </div>
       ) : error ? (
-        <div className="py-8 text-center text-xs text-red-500 font-medium">
-          {error}
-        </div>
+        <p className="text-sm text-red-600 py-4">{error}</p>
       ) : activities.length === 0 ? (
-        <div className="py-12 text-center bg-slate-50/50 border border-dashed border-slate-200 rounded-xl">
-          <Clock className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-          <p className="text-xs font-bold text-slate-600">No actions logged yet</p>
-          <p className="text-[10px] text-slate-400 mt-1">Actions on tasks, files, and updates will be audited here in real-time.</p>
+        <div className="py-10 text-center border-2 border-dashed border-[#E8E8E8] rounded-xl">
+          <GitCommit className="w-7 h-7 text-[#D0D0D0] mx-auto mb-2" />
+          <p className="text-sm text-[#525252] font-medium">No activity yet</p>
+          <p className="text-xs text-[#A0A0A0] mt-0.5">Actions will appear here as work progresses.</p>
         </div>
       ) : (
-        <div className="flow-root max-h-96 overflow-y-auto pr-1">
-          <ul className="-mb-8">
-            {activities.map((activity, idx) => {
-              const meta = getActivityIcon(activity.action);
+        <div className="flow-root max-h-80 overflow-y-auto">
+          <ul className="-mb-6">
+            {activities.map((a, idx) => {
+              const meta = ACTION_META[a.action] ?? { icon: GitCommit, color: "text-[#737373] bg-[#F4F4F4]" };
               const Icon = meta.icon;
               return (
-                <li key={activity.id}>
-                  <div className="relative pb-8">
-                    {idx !== activities.length - 1 ? (
-                      <span className="absolute top-4 left-4 -ml-px h-full w-0.5 bg-slate-100" aria-hidden="true" />
-                    ) : null}
-                    <div className="relative flex space-x-3">
-                      <div>
-                        <span className={`h-8 w-8 rounded-lg flex items-center justify-center ring-4 ring-white ${meta.bg}`}>
-                          <Icon className={`w-4 h-4 ${meta.text}`} aria-hidden="true" />
-                        </span>
-                      </div>
-                      <div className="flex-1 min-w-0 pt-1.5 flex justify-between space-x-4">
-                        <div>
-                          <p className="text-xs text-slate-600 font-medium">
-                            <span className="font-extrabold text-slate-900 inline-flex items-center space-x-1 mr-1">
-                              <User className="w-3.5 h-3.5 inline text-slate-400 mr-0.5" />
-                              <span>{activity.userName}</span>
-                            </span>
-                            {activity.details}
-                          </p>
-                        </div>
-                        <div className="text-right text-[10px] white-space-nowrap text-slate-400 font-mono tracking-wide">
-                          {new Date(activity.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </div>
-                      </div>
+                <li key={a.id} className="relative pb-6">
+                  {idx < activities.length - 1 && (
+                    <span className="absolute left-4 top-8 -ml-px h-full w-px bg-[#E8E8E8]" />
+                  )}
+                  <div className="flex gap-3">
+                    <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ring-2 ring-white ${meta.color}`}>
+                      <Icon className="w-4 h-4" />
+                    </span>
+                    <div className="flex-1 min-w-0 pt-1">
+                      <p className="text-sm text-[#525252]">
+                        <span className="font-semibold text-[#111111]">{a.userName}</span>{" "}
+                        {a.details}
+                      </p>
+                      <p className="text-xs text-[#A0A0A0] mt-0.5">
+                        {new Date(a.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </p>
                     </div>
                   </div>
                 </li>

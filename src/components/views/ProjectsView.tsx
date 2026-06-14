@@ -5,471 +5,281 @@ import { Button } from "../ui/Button.js";
 import { Input } from "../ui/Input.js";
 import { Modal } from "../ui/Modal.js";
 import { TipTapEditor } from "../editor/TipTapEditor.js";
-import { Project, Role, User, UserStatus } from "../../types/index.js";
-import { 
-  FolderKanban, 
-  Plus, 
-  Calendar, 
-  Award, 
-  CheckCircle2, 
-  ChevronRight, 
-  ShieldAlert, 
-  Users,
-  Paperclip 
-} from "lucide-react";
+import { Project, User, UserStatus } from "../../types/index.js";
+import { FolderKanban, Plus, Calendar, Users, ChevronRight, AlertCircle, Paperclip } from "lucide-react";
+
+const PRIORITY_STYLES: Record<string, string> = {
+  Low: "bg-[#F4F4F4] text-[#737373]",
+  Medium: "bg-[#fef3dc] text-[#9a5b00]",
+  High: "bg-orange-50 text-orange-700",
+  Critical: "bg-red-50 text-red-700",
+};
+const STATUS_STYLES: Record<string, string> = {
+  Planning: "bg-[#F4F4F4] text-[#737373]",
+  "In Progress": "bg-[#e8edfb] text-[#0038BC]",
+  Review: "bg-[#fef3dc] text-[#9a5b00]",
+  Completed: "bg-green-50 text-green-700",
+};
 
 export function ProjectsView() {
   const { projects, isLoading, error, refresh, createProject } = useProjects();
-  const token = useUIStore((state) => state.token);
-  const user = useUIStore((state) => state.user);
-  const navigate = useUIStore((state) => state.navigate);
+  const token = useUIStore((s) => s.token);
+  const user = useUIStore((s) => s.user);
+  const navigate = useUIStore((s) => s.navigate);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [usersList, setUsersList] = useState<User[]>([]);
 
-  // Setup form states
   const [projName, setProjName] = useState("");
   const [coverUrl, setCoverUrl] = useState("");
   const [desc, setDesc] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [priority, setPriority] = useState<"Low" | "Medium" | "High" | "Critical">("Medium");
-  const [status, setStatus] = useState<"Planning" | "In Progress" | "Review" | "Completed">("Planning");
+  const [priority, setPriority] = useState<any>("Medium");
+  const [status, setStatus] = useState<any>("Planning");
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
-  
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Load corporate members directory for assignment
-  useEffect(() => {
-    const fetchUsers = async () => {
-      if (!token) return;
-      try {
-        const res = await fetch("/api/users", {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (res.ok) {
-          const list = await res.json();
-          // Only permit approved users to belong to teams
-          setUsersList(list.filter((u: User) => u.status === UserStatus.APPROVED));
-        }
-      } catch (err) {
-        console.warn("Could not load users directory:", err);
-      }
-    };
-    fetchUsers();
-  }, [token]);
-
-  // Handle Multi-Select Members toggles
-  const handleToggleMember = (uId: string) => {
-    setSelectedMembers((prev) => 
-      prev.includes(uId) ? prev.filter((id) => id !== uId) : [...prev, uId]
-    );
-  };
-
   const [isUploading, setIsUploading] = useState(false);
   const [cloudinaryError, setCloudinaryError] = useState<string | null>(null);
 
-  const handleFileChangeAndUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    await uploadFileToCloudinary(file);
-  };
+  useEffect(() => {
+    if (!token) return;
+    fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((list) => setUsersList(list.filter((u: User) => u.status === UserStatus.APPROVED)))
+      .catch(() => { });
+  }, [token]);
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
+  const toggleMember = (id: string) =>
+    setSelectedMembers((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
-    await uploadFileToCloudinary(file);
-  };
-
-  const uploadFileToCloudinary = async (file: File) => {
+  const uploadCover = async (file: File) => {
     setIsUploading(true);
     setCloudinaryError(null);
-
     try {
       const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = (err) => reject(err);
+      const b64 = await new Promise<string>((res, rej) => {
+        reader.onload = () => res(reader.result as string);
+        reader.onerror = rej;
+        reader.readAsDataURL(file);
       });
-      reader.readAsDataURL(file);
-      const base64Data = await base64Promise;
-
-      const res = await fetch("/api/cloudinary/upload", {
+      const r = await fetch("/api/cloudinary/upload", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          base64Data,
-          filename: file.name
-        })
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ base64Data: b64, filename: file.name }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to upload file.");
-      }
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error);
       setCoverUrl(data.url);
-      if (data.simulated) {
-        setCloudinaryError("Offline simulation bounds. Dummy placeholder cover assigned.");
-      }
+      if (data.simulated) setCloudinaryError("Running in simulation mode — placeholder image assigned.");
     } catch (err: any) {
-      setCloudinaryError(err.message || "Failed uploading file");
+      setCloudinaryError(err.message);
     } finally {
       setIsUploading(false);
     }
   };
 
-  const handleFormSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!projName.trim() || !desc.trim() || !startDate || !endDate) {
-      setFormError("Project Name, Rich Description, Start/End dates are required.");
+      setFormError("Project name, description, and dates are required.");
       return;
     }
-
     setIsSubmitting(true);
     setFormError(null);
-
     try {
       await createProject({
         name: projName,
         coverImageUrl: coverUrl || "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?auto=format&fit=crop&q=80&w=600",
         richTextDescription: desc,
-        startDate,
-        endDate,
-        priority,
-        status,
-        members: selectedMembers.length > 0 ? selectedMembers : (user ? [user.id] : [])
+        startDate, endDate, priority, status,
+        members: selectedMembers.length ? selectedMembers : user ? [user.id] : [],
       });
-
-      // Clear form
-      setProjName("");
-      setCoverUrl("");
-      setDesc("");
-      setStartDate("");
-      setEndDate("");
-      setPriority("Medium");
-      setStatus("Planning");
-      setSelectedMembers([]);
-
+      setProjName(""); setCoverUrl(""); setDesc(""); setStartDate(""); setEndDate("");
+      setPriority("Medium"); setStatus("Planning"); setSelectedMembers([]);
       setIsModalOpen(false);
       refresh();
     } catch (err: any) {
-      setFormError(err.message || "Failed to finalize project workspace.");
+      setFormError(err.message);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Determine if logged-in user can create a project - everyone is admin-like inside their envs
-  const canCreate = true;
-
-  const getPriorityBadgeColors = (p: string) => {
-    switch (p) {
-      case "Low": return "bg-slate-100 text-slate-700";
-      case "Medium": return "bg-amber-50 text-amber-700 border-amber-200";
-      case "High": return "bg-orange-50 text-orange-700 border-orange-200";
-      case "Critical": return "bg-pink-50 text-theme-pink border border-pink-200 animate-pulse";
-      default: return "bg-slate-100 text-slate-700";
-    }
-  };
-
-  const getStatusBadgeColors = (st: string) => {
-    switch (st) {
-      case "Planning": return "bg-slate-100 text-slate-700";
-      case "In Progress": return "bg-sky-50 text-sky-700 border border-sky-200";
-      case "Review": return "bg-amber-50 text-theme-yellow border border-amber-200";
-      case "Completed": return "bg-emerald-50 text-emerald-700 border border-emerald-200";
-      default: return "bg-slate-100 text-slate-700";
-    }
-  };
-
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-200">
-      
-      {/* Portfolio Header Column */}
-      <div className="flex flex-col sm:flex-row justify-between sm:items-center bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs">
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white rounded-xl border border-[#E8E8E8] px-5 py-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 font-display">Projects Portfolio</h2>
-          <p className="text-slate-500 text-xs mt-1">Configure company workspaces, track deadlines, and assemble staffing teams</p>
+          <h2 className="text-base font-semibold text-[#111111]">Projects</h2>
+          <p className="text-sm text-[#737373] mt-0.5">Manage workspaces, deadlines, and teams</p>
         </div>
-        {canCreate && (
-          <div className="mt-4 sm:mt-0">
-            <Button
-              onClick={() => setIsModalOpen(true)}
-              variant="primary"
-              className="inline-flex items-center space-x-1.5 font-sans"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Assemble Project Workspace</span>
-            </Button>
-          </div>
-        )}
+        <Button onClick={() => setIsModalOpen(true)} variant="primary">
+          <Plus className="w-4 h-4" />
+          New project
+        </Button>
       </div>
 
       {isLoading ? (
-        <div className="py-24 text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-theme-purple mx-auto mb-2" />
-          <span className="text-xs text-slate-400 font-medium">Downloading company records...</span>
+        <div className="flex justify-center py-24">
+          <div className="w-8 h-8 border-2 border-[#0038BC] border-t-transparent rounded-full animate-spin" />
         </div>
       ) : error ? (
-        <div className="p-4 bg-pink-50 border border-pink-100 rounded-xl text-slate-700 text-xs font-semibold">
-          Error: {error}
+        <div className="flex items-center gap-2.5 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          {error}
         </div>
       ) : (
-        /* Projects Visual Bento Grid */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {projects.map((proj) => (
-            <div
+            <button
               key={proj.id}
               onClick={() => navigate(`projects/${proj.id}`)}
-              className="bg-white border border-slate-200/80 rounded-2xl overflow-hidden cursor-pointer hover:border-slate-300 transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between group h-[300px]"
+              className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden hover:border-[#0038BC]/30 hover:shadow-md transition-all text-left group"
             >
-              {/* Cover Photo Backdrop */}
-              <div className="h-28 relative overflow-hidden bg-slate-100">
+              {/* Cover */}
+              <div className="h-32 relative overflow-hidden bg-[#EEEEEE]">
                 <img
                   src={proj.coverImageUrl || "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?auto=format&fit=crop&q=80&w=600"}
-                  alt={proj.name}
-                  referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover group-hover:scale-105 duration-300 transition-transform"
+                  alt=""
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/40 to-transparent" />
-                
-                {/* Meta Labels */}
-                <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between text-white">
-                  <h3 className="font-bold text-sm truncate pr-4 font-display leading-tight">{proj.name}</h3>
-                  <span className={`text-[9px] font-bold font-mono uppercase px-2 py-0.5 rounded-full ${getStatusBadgeColors(proj.status)}`}>
+                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                <div className="absolute bottom-3 left-4 right-4 flex items-end justify-between">
+                  <h3 className="text-sm font-semibold text-white truncate pr-2">{proj.name}</h3>
+                  <span className={`text-xs px-2 py-0.5 rounded-md font-medium shrink-0 ${STATUS_STYLES[proj.status] || "bg-[#F4F4F4] text-[#737373]"}`}>
                     {proj.status}
                   </span>
                 </div>
               </div>
 
-              {/* Specs info */}
-              <div className="p-4 flex-1 flex flex-col justify-between">
-                
-                {/* Description snippet */}
-                <div className="text-xs text-slate-500 leading-relaxed font-sans mb-3 line-clamp-2">
-                  {proj.richTextDescription.replace(/<[^>]*>/g, "") || "No descriptive details entered for workspace portfolio."}
-                </div>
-
-                <div className="flex items-center justify-between text-[11px] font-mono font-medium text-slate-400 mb-2">
-                  {/* Start / End Duration block */}
-                  <div className="flex items-center space-x-1">
-                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{proj.startDate} to {proj.endDate}</span>
-                  </div>
-
-                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${getPriorityBadgeColors(proj.priority)}`}>
+              {/* Body */}
+              <div className="p-4">
+                <p className="text-sm text-[#737373] line-clamp-2 mb-3">
+                  {proj.richTextDescription.replace(/<[^>]*>/g, "") || "No description."}
+                </p>
+                <div className="flex items-center justify-between text-xs text-[#A0A0A0]">
+                  <span className="flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5" />
+                    {proj.startDate} – {proj.endDate}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-md ${PRIORITY_STYLES[proj.priority] || "bg-[#F4F4F4] text-[#737373]"}`}>
                     {proj.priority}
                   </span>
                 </div>
               </div>
 
-              {/* Card Footer Roster Indicator */}
-              <div className="px-4 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-                <div className="flex items-center space-x-1.5 text-xs text-slate-400 font-semibold font-mono">
-                  <Users className="w-4 h-4 text-slate-400" />
-                  <span>{proj.members?.length || 0} Member(s)</span>
-                </div>
-                <div className="text-xs text-theme-teal font-bold flex items-center space-x-0.5 group-hover:translate-x-1 duration-200 transition-transform font-display">
-                  <span>Enter Workspace</span>
-                  <ChevronRight className="w-4 h-4" />
-                </div>
+              {/* Footer */}
+              <div className="px-4 py-3 bg-[#F7F8FA] border-t border-[#E8E8E8] flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-xs text-[#737373]">
+                  <Users className="w-3.5 h-3.5" />
+                  {proj.members?.length || 0} members
+                </span>
+                <span className="flex items-center gap-0.5 text-xs text-[#0038BC] font-medium group-hover:gap-1.5 transition-all">
+                  Open <ChevronRight className="w-3.5 h-3.5" />
+                </span>
               </div>
-
-            </div>
+            </button>
           ))}
 
           {projects.length === 0 && (
-            <div className="col-span-full border-2 border-dashed border-slate-200 rounded-2xl py-24 text-center">
-              <FolderKanban className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-              <p className="text-sm font-bold text-slate-600">Workspace portfolio is completely clear</p>
-              <p className="text-xs text-slate-400 mt-1 italic max-w-sm mx-auto p-4 pl-6">
-                Assemble high performance spaces using the creation buttons above as Admin/Project Manager.
-              </p>
+            <div className="col-span-full flex flex-col items-center justify-center py-24 border-2 border-dashed border-[#E8E8E8] rounded-xl">
+              <FolderKanban className="w-10 h-10 text-[#D0D0D0] mb-3" />
+              <p className="font-medium text-[#525252]">No projects yet</p>
+              <p className="text-sm text-[#A0A0A0] mt-1">Create your first project to get started.</p>
             </div>
           )}
         </div>
       )}
 
-      {/* Assemble Project Dialog Modal */}
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Assemble Project Workspace" size="lg">
-        <form onSubmit={handleFormSubmit} className="space-y-4">
+      {/* Create project modal */}
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="New project" size="lg">
+        <form onSubmit={handleSubmit} className="space-y-4">
           {formError && (
-            <div className="p-3 bg-pink-50 border border-pink-100 rounded-lg text-theme-pink text-xs font-semibold flex items-center space-x-2">
-              <ShieldAlert className="w-4 h-4 flex-shrink-0" />
-              <span>{formError}</span>
+            <div className="flex items-start gap-2.5 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              {formError}
             </div>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="flex flex-col justify-between space-y-4">
-              <Input
-                id="proj-title"
-                label="Project Title"
-                placeholder="e.g. Q4 Cloud Migration"
-                value={projName}
-                onChange={(e) => setProjName(e.target.value)}
-                required
-              />
-              <Input
-                id="proj-cover"
-                label="Cover Image URL link (Optional)"
-                placeholder="https://images.unsplash.com/..."
-                value={coverUrl}
-                onChange={(e) => setCoverUrl(e.target.value)}
-              />
+            <div className="space-y-4">
+              <Input id="proj-title" label="Project name" placeholder="e.g. Q4 Cloud Migration" value={projName} onChange={(e) => setProjName(e.target.value)} required />
+              <Input id="proj-cover" label="Cover image URL (optional)" placeholder="https://…" value={coverUrl} onChange={(e) => setCoverUrl(e.target.value)} />
             </div>
 
-            {/* Cloudinary Visual Drag and Drop */}
+            {/* Cover upload */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2 px-1">
-                Upload Cover Photo
-              </label>
+              <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Upload cover</label>
               <div
-                onDragOver={handleDragOver}
-                onDrop={handleDrop}
-                onClick={() => document.getElementById("cover-file-upload")?.click()}
-                className="border-2 border-dashed border-slate-200 hover:border-theme-teal rounded-xl p-4 text-center cursor-pointer bg-slate-50 hover:bg-slate-50/50 transition-all flex flex-col items-center justify-center space-y-2 group h-[134px]"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCover(f); }}
+                onClick={() => document.getElementById("cover-upload-proj")?.click()}
+                className="border-2 border-dashed border-[#D0D0D0] rounded-lg h-24 flex flex-col items-center justify-center cursor-pointer hover:border-[#0038BC] transition-colors"
               >
-                <input
-                  id="cover-file-upload"
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleFileChangeAndUpload}
-                />
-                <Paperclip className="w-6 h-6 text-slate-400 group-hover:text-theme-teal group-hover:scale-110 duration-200 transition-all" />
+                <input id="cover-upload-proj" type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCover(f); }} />
+                <Paperclip className="w-5 h-5 text-[#A0A0A0] mb-1" />
                 {isUploading ? (
-                  <span className="text-xs font-medium text-slate-500 animate-pulse">Uploading cover...</span>
+                  <span className="text-xs text-[#737373] animate-pulse">Uploading…</span>
                 ) : (
-                  <div className="space-y-0.5">
-                    <span className="text-xs font-semibold text-slate-700 block">Drag & drop cover or <span className="text-theme-teal underline group-hover:text-theme-teal/85">browse</span></span>
-                    <span className="text-[9px] text-slate-400 block font-sans">Ideal: 16:9 Landscape ratios</span>
-                  </div>
+                  <span className="text-xs text-[#737373]">Drop or click to upload</span>
                 )}
               </div>
-              {cloudinaryError && (
-                <p className="text-[9px] text-amber-600 font-semibold mt-1 px-1">{cloudinaryError}</p>
-              )}
+              {cloudinaryError && <p className="text-xs text-[#EF8F00] mt-1">{cloudinaryError}</p>}
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input
-              id="proj-start"
-              label="Start Date"
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              required
-            />
-            <Input
-              id="proj-end"
-              label="End target Date"
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              required
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <Input id="proj-start" label="Start date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
+            <Input id="proj-end" label="End date" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} required />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <label htmlFor="proj-status" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1 px-1">
-                Project Current Status
-              </label>
-              <select
-                id="proj-status"
-                value={status}
-                onChange={(e) => setStatus(e.target.value as any)}
-                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-800 focus:outline-none focus:border-theme-teal focus:ring-1 focus:ring-teal-400"
-              >
-                <option value="Planning">Planning</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Review">Review</option>
-                <option value="Completed">Completed</option>
+              <label htmlFor="proj-status" className="block text-sm font-medium text-[#3D3D3D] mb-1">Status</label>
+              <select id="proj-status" value={status} onChange={(e) => setStatus(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/20 focus:border-[#0038BC]">
+                {["Planning", "In Progress", "Review", "Completed"].map((s) => <option key={s}>{s}</option>)}
               </select>
             </div>
-
             <div>
-              <label htmlFor="proj-priority" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1 px-1">
-                Workspace Urgency Priority
-              </label>
-              <select
-                id="proj-priority"
-                value={priority}
-                onChange={(e) => setPriority(e.target.value as any)}
-                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-800 focus:outline-none focus:border-theme-teal focus:ring-1 focus:ring-teal-400"
-              >
-                <option value="Low">Low</option>
-                <option value="Medium">Medium</option>
-                <option value="High">High</option>
-                <option value="Critical">Critical</option>
+              <label htmlFor="proj-priority" className="block text-sm font-medium text-[#3D3D3D] mb-1">Priority</label>
+              <select id="proj-priority" value={priority} onChange={(e) => setPriority(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/20 focus:border-[#0038BC]">
+                {["Low", "Medium", "High", "Critical"].map((p) => <option key={p}>{p}</option>)}
               </select>
             </div>
           </div>
 
-          {/* Rich text desc */}
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5 px-1">
-              Project Statement Description
-            </label>
-            <TipTapEditor
-              value={desc}
-              onChange={setDesc}
-              placeholder="State targets, cover links, specs description..."
-            />
+            <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Description</label>
+            <TipTapEditor value={desc} onChange={setDesc} placeholder="Describe the project goals and scope…" />
           </div>
 
-          {/* Multi select project members */}
+          {/* Member selection */}
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2 px-1">
-              Assign Team Members (Approved staff Roster)
-            </label>
-            <div className="max-h-36 overflow-y-auto border border-slate-200 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-50">
-              {usersList.map((usr) => {
-                const isSelected = selectedMembers.includes(usr.id);
+            <label className="block text-sm font-medium text-[#3D3D3D] mb-2">Add team members</label>
+            <div className="max-h-36 overflow-y-auto border border-[#E8E8E8] rounded-lg bg-[#F7F8FA] p-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+              {usersList.map((u) => {
+                const sel = selectedMembers.includes(u.id);
                 return (
-                  <button
-                    key={usr.id}
-                    type="button"
-                    onClick={() => handleToggleMember(usr.id)}
-                    className={`flex items-center space-x-2.5 p-2 rounded-lg text-left transition-all text-xs font-medium border ${
-                      isSelected
-                        ? "bg-teal-50 border-theme-teal text-theme-teal font-bold shadow-2xs"
-                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-100"
-                    }`}
-                  >
-                    <div className={`w-4 h-4 rounded border flex items-center justify-center ${
-                      isSelected ? "border-theme-teal bg-theme-teal text-white" : "border-slate-300"
-                    }`}>
-                      {isSelected && <Award className="w-2.5 h-2.5" />}
+                  <button key={u.id} type="button" onClick={() => toggleMember(u.id)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-colors ${sel ? "bg-[#e8edfb] text-[#0038BC] border border-[#0038BC]/20" : "bg-white border border-[#E8E8E8] text-[#3D3D3D] hover:bg-[#F4F4F4]"}`}>
+                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${sel ? "bg-[#0038BC] border-[#0038BC]" : "border-[#D0D0D0]"}`}>
+                      {sel && <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                     </div>
-                    <span className="truncate pr-1">{usr.name} (@{usr.username})</span>
+                    <span className="truncate">{u.name}</span>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <div className="flex justify-end space-x-3 pt-4 border-t border-slate-100">
-            <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
-              Cancel Setup
-            </Button>
-            <Button type="submit" variant="primary" isLoading={isSubmitting}>
-              Launch Workspace
-            </Button>
+          <div className="flex justify-end gap-3 pt-2 border-t border-[#E8E8E8]">
+            <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="primary" isLoading={isSubmitting}>Create project</Button>
           </div>
         </form>
       </Modal>
-
     </div>
   );
 }

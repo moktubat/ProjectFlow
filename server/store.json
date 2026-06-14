@@ -12,10 +12,133 @@
       "id": "usr_0viqysz9i"
     }
   ],
-  "projects": [],
-  "tasks": [],
+  "projects": [
+    {
+      "_id": "proj_1ztr1qffx",
+      "name": "Stewart Guerra",
+      "richTextDescription": "Quod quod fugiat et ",
+      "status": "Review",
+      "priority": "Medium",
+      "startDate": "1985-08-18",
+      "endDate": "1988-07-25",
+      "coverImageUrl": "https://images01.nicepagecdn.com/page/53/18/website-template-preview-53183.jpg",
+      "ownerId": "usr_0viqysz9i",
+      "tags": [],
+      "members": [
+        "usr_0viqysz9i"
+      ],
+      "files": [],
+      "deleted": false,
+      "id": "proj_1ztr1qffx"
+    }
+  ],
+  "tasks": [
+    {
+      "_id": "tsk_gxl8fhd6m",
+      "projectId": "proj_1ztr1qffx",
+      "title": "Dolore cum placeat ",
+      "richTextDesc": "Do quis qui vel illo",
+      "status": "Review",
+      "priority": "Critical",
+      "category": "Billing",
+      "dueDate": "1971-01-22",
+      "estimatedHours": 43,
+      "assignees": [],
+      "dependencies": [],
+      "timeLogs": [],
+      "deleted": false,
+      "id": "tsk_gxl8fhd6m"
+    },
+    {
+      "_id": "tsk_p0sqj5jib",
+      "projectId": "proj_1ztr1qffx",
+      "title": "Veniam necessitatib",
+      "richTextDesc": "Itaque pariatur Cul",
+      "status": "To Do",
+      "priority": "Low",
+      "category": "Design",
+      "dueDate": "2004-08-06",
+      "estimatedHours": 80,
+      "assignees": [],
+      "dependencies": [],
+      "timeLogs": [],
+      "deleted": false,
+      "id": "tsk_p0sqj5jib"
+    }
+  ],
   "teams": [],
   "comments": [],
   "notifications": [],
-  "activities": []
+  "activities": [
+    {
+      "_id": "act_l3i8blbgc",
+      "projectId": "proj_1ztr1qffx",
+      "userId": "usr_0viqysz9i",
+      "userName": "Moktubat Jaman",
+      "action": "project_created",
+      "details": "Created project: \"Stewart Guerra\"",
+      "createdAt": "2026-06-12T17:30:00.021Z",
+      "id": "act_l3i8blbgc"
+    },
+    {
+      "_id": "act_ayphom8vz",
+      "projectId": "proj_1ztr1qffx",
+      "userId": "usr_0viqysz9i",
+      "userName": "Moktubat Jaman",
+      "action": "task_created",
+      "details": "Created task: \"Dolore cum placeat \" (Priority: Critical)",
+      "createdAt": "2026-06-12T17:30:43.095Z",
+      "id": "act_ayphom8vz"
+    },
+    {
+      "_id": "act_xteh2d8f8",
+      "projectId": "proj_1ztr1qffx",
+      "userId": "usr_0viqysz9i",
+      "userName": "Moktubat Jaman",
+      "action": "task_moved",
+      "details": "Moved task \"Dolore cum placeat \" from \"Done\" to \"Review\"",
+      "createdAt": "2026-06-12T17:30:47.644Z",
+      "id": "act_xteh2d8f8"
+    },
+    {
+      "_id": "act_5uavvwn7d",
+      "projectId": "proj_1ztr1qffx",
+      "userId": "usr_0viqysz9i",
+      "userName": "Moktubat Jaman",
+      "action": "task_created",
+      "details": "Created task: \"Veniam necessitatib\" (Priority: Low)",
+      "createdAt": "2026-06-12T17:42:57.786Z",
+      "id": "act_5uavvwn7d"
+    },
+    {
+      "_id": "act_vkb8h1lk1",
+      "projectId": "proj_1ztr1qffx",
+      "userId": "usr_0viqysz9i",
+      "userName": "Moktubat Jaman",
+      "action": "task_moved",
+      "details": "Moved task \"Veniam necessitatib\" from \"Done\" to \"Review\"",
+      "createdAt": "2026-06-12T17:43:02.235Z",
+      "id": "act_vkb8h1lk1"
+    },
+    {
+      "_id": "act_5kefbfpax",
+      "projectId": "proj_1ztr1qffx",
+      "userId": "usr_0viqysz9i",
+      "userName": "Moktubat Jaman",
+      "action": "task_moved",
+      "details": "Moved task \"Veniam necessitatib\" from \"Review\" to \"In Progress\"",
+      "createdAt": "2026-06-12T18:23:43.981Z",
+      "id": "act_5kefbfpax"
+    },
+    {
+      "_id": "act_z9mwb6upu",
+      "projectId": "proj_1ztr1qffx",
+      "userId": "usr_0viqysz9i",
+      "userName": "Moktubat Jaman",
+      "action": "task_moved",
+      "details": "Moved task \"Veniam necessitatib\" from \"In Progress\" to \"To Do\"",
+      "createdAt": "2026-06-12T18:23:47.882Z",
+      "id": "act_z9mwb6upu"
+    }
+  ]
 }
