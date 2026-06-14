@@ -1,9 +1,15 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import React, { useState, useEffect } from "react";
 import { useProjects } from "../../hooks/useProjects.js";
 import { useUIStore } from "../../store/ui-store.js";
+import { usePageTitle } from "../../hooks/usePageTitle.js";
 import { Button } from "../ui/Button.js";
 import { Input } from "../ui/Input.js";
-import { Modal } from "../ui/Modal.js";
+import { SlidePanel } from "../ui/SlidePanel.js";
 import { TipTapEditor } from "../editor/TipTapEditor.js";
 import { Project, User, UserStatus } from "../../types/index.js";
 import { FolderKanban, Plus, Calendar, Users, ChevronRight, AlertCircle, Paperclip } from "lucide-react";
@@ -22,12 +28,14 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 export function ProjectsView() {
+  usePageTitle("Projects", "Manage all your projects, deadlines, and teams in ProjectFlow.");
+
   const { projects, isLoading, error, refresh, createProject } = useProjects();
   const token = useUIStore((s) => s.token);
   const user = useUIStore((s) => s.user);
   const navigate = useUIStore((s) => s.navigate);
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [usersList, setUsersList] = useState<User[]>([]);
 
   const [projName, setProjName] = useState("");
@@ -72,12 +80,17 @@ export function ProjectsView() {
       const data = await r.json();
       if (!r.ok) throw new Error(data.error);
       setCoverUrl(data.url);
-      if (data.simulated) setCloudinaryError("Running in simulation mode — placeholder image assigned.");
+      if (data.simulated) setCloudinaryError("Simulation mode — placeholder image assigned.");
     } catch (err: any) {
       setCloudinaryError(err.message);
     } finally {
       setIsUploading(false);
     }
+  };
+
+  const resetForm = () => {
+    setProjName(""); setCoverUrl(""); setDesc(""); setStartDate(""); setEndDate("");
+    setPriority("Medium"); setStatus("Planning"); setSelectedMembers([]); setFormError(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -96,9 +109,8 @@ export function ProjectsView() {
         startDate, endDate, priority, status,
         members: selectedMembers.length ? selectedMembers : user ? [user.id] : [],
       });
-      setProjName(""); setCoverUrl(""); setDesc(""); setStartDate(""); setEndDate("");
-      setPriority("Medium"); setStatus("Planning"); setSelectedMembers([]);
-      setIsModalOpen(false);
+      resetForm();
+      setIsPanelOpen(false);
       refresh();
     } catch (err: any) {
       setFormError(err.message);
@@ -106,6 +118,8 @@ export function ProjectsView() {
       setIsSubmitting(false);
     }
   };
+
+  const SEL = "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/20 focus:border-[#0038BC]";
 
   return (
     <div className="space-y-6">
@@ -115,7 +129,7 @@ export function ProjectsView() {
           <h2 className="text-base font-semibold text-[#111111]">Projects</h2>
           <p className="text-sm text-[#737373] mt-0.5">Manage workspaces, deadlines, and teams</p>
         </div>
-        <Button onClick={() => setIsModalOpen(true)} variant="primary">
+        <Button onClick={() => setIsPanelOpen(true)} variant="primary">
           <Plus className="w-4 h-4" />
           New project
         </Button>
@@ -127,8 +141,7 @@ export function ProjectsView() {
         </div>
       ) : error ? (
         <div className="flex items-center gap-2.5 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          {error}
+          <AlertCircle className="w-4 h-4 shrink-0" />{error}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
@@ -138,7 +151,6 @@ export function ProjectsView() {
               onClick={() => navigate(`projects/${proj.id}`)}
               className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden hover:border-[#0038BC]/30 hover:shadow-md transition-all text-left group"
             >
-              {/* Cover */}
               <div className="h-32 relative overflow-hidden bg-[#EEEEEE]">
                 <img
                   src={proj.coverImageUrl || "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?auto=format&fit=crop&q=80&w=600"}
@@ -154,7 +166,6 @@ export function ProjectsView() {
                 </div>
               </div>
 
-              {/* Body */}
               <div className="p-4">
                 <p className="text-sm text-[#737373] line-clamp-2 mb-3">
                   {proj.richTextDescription.replace(/<[^>]*>/g, "") || "No description."}
@@ -170,11 +181,9 @@ export function ProjectsView() {
                 </div>
               </div>
 
-              {/* Footer */}
               <div className="px-4 py-3 bg-[#F7F8FA] border-t border-[#E8E8E8] flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-xs text-[#737373]">
-                  <Users className="w-3.5 h-3.5" />
-                  {proj.members?.length || 0} members
+                  <Users className="w-3.5 h-3.5" />{proj.members?.length || 0} members
                 </span>
                 <span className="flex items-center gap-0.5 text-xs text-[#0038BC] font-medium group-hover:gap-1.5 transition-all">
                   Open <ChevronRight className="w-3.5 h-3.5" />
@@ -188,63 +197,69 @@ export function ProjectsView() {
               <FolderKanban className="w-10 h-10 text-[#D0D0D0] mb-3" />
               <p className="font-medium text-[#525252]">No projects yet</p>
               <p className="text-sm text-[#A0A0A0] mt-1">Create your first project to get started.</p>
+              <Button onClick={() => setIsPanelOpen(true)} variant="primary" className="mt-4">
+                <Plus className="w-4 h-4" /> New project
+              </Button>
             </div>
           )}
         </div>
       )}
 
-      {/* Create project modal */}
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="New project" size="lg">
+      {/* New project slide panel */}
+      <SlidePanel
+        isOpen={isPanelOpen}
+        onClose={() => { setIsPanelOpen(false); resetForm(); }}
+        title="New project"
+        description="Fill in the details to create a new project."
+        size="lg"
+      >
         <form onSubmit={handleSubmit} className="space-y-4">
           {formError && (
             <div className="flex items-start gap-2.5 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              {formError}
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />{formError}
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-4">
-              <Input id="proj-title" label="Project name" placeholder="e.g. Q4 Cloud Migration" value={projName} onChange={(e) => setProjName(e.target.value)} required />
-              <Input id="proj-cover" label="Cover image URL (optional)" placeholder="https://…" value={coverUrl} onChange={(e) => setCoverUrl(e.target.value)} />
-            </div>
+          <Input id="proj-title" label="Project name" placeholder="e.g. Q4 Cloud Migration" value={projName} onChange={(e) => setProjName(e.target.value)} required />
 
-            {/* Cover upload */}
-            <div>
-              <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Upload cover</label>
-              <div
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCover(f); }}
-                onClick={() => document.getElementById("cover-upload-proj")?.click()}
-                className="border-2 border-dashed border-[#D0D0D0] rounded-lg h-24 flex flex-col items-center justify-center cursor-pointer hover:border-[#0038BC] transition-colors"
-              >
-                <input id="cover-upload-proj" type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCover(f); }} />
-                <Paperclip className="w-5 h-5 text-[#A0A0A0] mb-1" />
-                {isUploading ? (
-                  <span className="text-xs text-[#737373] animate-pulse">Uploading…</span>
-                ) : (
-                  <span className="text-xs text-[#737373]">Drop or click to upload</span>
-                )}
-              </div>
-              {cloudinaryError && <p className="text-xs text-[#EF8F00] mt-1">{cloudinaryError}</p>}
+          {/* Cover image */}
+          <div>
+            <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Cover image</label>
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCover(f); }}
+              onClick={() => document.getElementById("cover-upload-proj")?.click()}
+              className="border-2 border-dashed border-[#D0D0D0] rounded-lg h-24 flex flex-col items-center justify-center cursor-pointer hover:border-[#0038BC] transition-colors"
+            >
+              <input id="cover-upload-proj" type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCover(f); }} />
+              <Paperclip className="w-5 h-5 text-[#A0A0A0] mb-1" />
+              {isUploading ? (
+                <span className="text-xs text-[#737373] animate-pulse">Uploading…</span>
+              ) : coverUrl ? (
+                <span className="text-xs text-green-600 font-medium">Image uploaded ✓</span>
+              ) : (
+                <span className="text-xs text-[#737373]">Drop or click to upload cover</span>
+              )}
             </div>
+            {cloudinaryError && <p className="text-xs text-[#EF8F00] mt-1">{cloudinaryError}</p>}
+            <Input label="Or paste cover URL" placeholder="https://…" value={coverUrl} onChange={(e) => setCoverUrl(e.target.value)} className="mt-2" />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             <Input id="proj-start" label="Start date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
             <Input id="proj-end" label="End date" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} required />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="proj-status" className="block text-sm font-medium text-[#3D3D3D] mb-1">Status</label>
-              <select id="proj-status" value={status} onChange={(e) => setStatus(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/20 focus:border-[#0038BC]">
+              <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Status</label>
+              <select value={status} onChange={(e) => setStatus(e.target.value)} className={SEL}>
                 {["Planning", "In Progress", "Review", "Completed"].map((s) => <option key={s}>{s}</option>)}
               </select>
             </div>
             <div>
-              <label htmlFor="proj-priority" className="block text-sm font-medium text-[#3D3D3D] mb-1">Priority</label>
-              <select id="proj-priority" value={priority} onChange={(e) => setPriority(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/20 focus:border-[#0038BC]">
+              <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Priority</label>
+              <select value={priority} onChange={(e) => setPriority(e.target.value)} className={SEL}>
                 {["Low", "Medium", "High", "Critical"].map((p) => <option key={p}>{p}</option>)}
               </select>
             </div>
@@ -255,19 +270,22 @@ export function ProjectsView() {
             <TipTapEditor value={desc} onChange={setDesc} placeholder="Describe the project goals and scope…" />
           </div>
 
-          {/* Member selection */}
+          {/* Team members */}
           <div>
-            <label className="block text-sm font-medium text-[#3D3D3D] mb-2">Add team members</label>
-            <div className="max-h-36 overflow-y-auto border border-[#E8E8E8] rounded-lg bg-[#F7F8FA] p-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            <label className="block text-sm font-medium text-[#3D3D3D] mb-2">Team members</label>
+            <div className="max-h-40 overflow-y-auto border border-[#E8E8E8] rounded-lg bg-[#F7F8FA] p-2 grid grid-cols-1 gap-1.5">
               {usersList.map((u) => {
                 const sel = selectedMembers.includes(u.id);
                 return (
                   <button key={u.id} type="button" onClick={() => toggleMember(u.id)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-colors ${sel ? "bg-[#e8edfb] text-[#0038BC] border border-[#0038BC]/20" : "bg-white border border-[#E8E8E8] text-[#3D3D3D] hover:bg-[#F4F4F4]"}`}>
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition-colors ${sel ? "bg-[#e8edfb] text-[#0038BC] border border-[#0038BC]/20" : "bg-white border border-[#E8E8E8] text-[#3D3D3D] hover:bg-[#F4F4F4]"}`}>
                     <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${sel ? "bg-[#0038BC] border-[#0038BC]" : "border-[#D0D0D0]"}`}>
                       {sel && <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                     </div>
-                    <span className="truncate">{u.name}</span>
+                    <div className="min-w-0">
+                      <span className="block truncate font-medium">{u.name}</span>
+                      <span className="text-xs text-[#737373]">{u.role}</span>
+                    </div>
                   </button>
                 );
               })}
@@ -275,11 +293,11 @@ export function ProjectsView() {
           </div>
 
           <div className="flex justify-end gap-3 pt-2 border-t border-[#E8E8E8]">
-            <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>Cancel</Button>
+            <Button type="button" variant="outline" onClick={() => { setIsPanelOpen(false); resetForm(); }}>Cancel</Button>
             <Button type="submit" variant="primary" isLoading={isSubmitting}>Create project</Button>
           </div>
         </form>
-      </Modal>
+      </SlidePanel>
     </div>
   );
 }

@@ -1,5 +1,11 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import React, { useEffect, useState } from "react";
 import { useUIStore } from "../../store/ui-store.js";
+import { usePageTitle } from "../../hooks/usePageTitle.js";
 import { Button } from "../ui/Button.js";
 import { Task, Project, User, Role, UserStatus } from "../../types/index.js";
 import {
@@ -28,6 +34,8 @@ function StatCard({
 }
 
 export function DashboardView() {
+  usePageTitle("Dashboard", "Your ProjectFlow workspace overview — projects, tasks, deadlines, and team workload at a glance.");
+
   const token = useUIStore((s) => s.token);
   const user = useUIStore((s) => s.user);
   const navigate = useUIStore((s) => s.navigate);

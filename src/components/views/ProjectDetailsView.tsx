@@ -1,10 +1,16 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import React, { useState, useEffect } from "react";
 import { useProject } from "../../hooks/useProject.js";
 import { useTasks } from "../../hooks/useTasks.js";
 import { useUIStore } from "../../store/ui-store.js";
+import { usePageTitle } from "../../hooks/usePageTitle.js";
 import { Button } from "../ui/Button.js";
 import { Input } from "../ui/Input.js";
-import { Modal } from "../ui/Modal.js";
+import { SlidePanel } from "../ui/SlidePanel.js";
 import { ActivityStream } from "../ActivityStream.js";
 import { KanbanBoard } from "../kanban/KanbanBoard.js";
 import { TipTapEditor } from "../editor/TipTapEditor.js";
@@ -25,14 +31,23 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const token = useUIStore((s) => s.token);
   const navigate = useUIStore((s) => s.navigate);
 
+  // Dynamic page title based on loaded project
+  usePageTitle(
+    project ? project.name : "Project",
+    project ? `${project.name} — tasks, progress, and team in ProjectFlow.` : undefined
+  );
+
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
   const [detailTab, setDetailTab] = useState<"charter" | "activity">("charter");
   const [viewMode, setViewMode] = useState<"kanban" | "gantt" | "analytics">("kanban");
-  const [isTaskModal, setTaskModal] = useState(false);
-  const [isFileModal, setFileModal] = useState(false);
-  const [isRosterModal, setRosterModal] = useState(false);
 
+  // Panel open states
+  const [isTaskPanel, setTaskPanel] = useState(false);
+  const [isFilePanel, setFilePanel] = useState(false);
+  const [isRosterPanel, setRosterPanel] = useState(false);
+
+  // Task form
   const [tTitle, setTTitle] = useState("");
   const [tDesc, setTDesc] = useState("");
   const [tStatus, setTStatus] = useState<any>("To Do");
@@ -45,6 +60,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const [tErr, setTErr] = useState<string | null>(null);
   const [tBusy, setTBusy] = useState(false);
 
+  // File form
   const [fName, setFName] = useState("");
   const [fUrl, setFUrl] = useState("");
   const [fCat, setFCat] = useState("Specification");
@@ -53,6 +69,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
 
+  // Roster / invite
   const [invRole, setInvRole] = useState("DEVELOPER");
   const [invTeam, setInvTeam] = useState("");
   const [copied, setCopied] = useState(false);
@@ -113,7 +130,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
         body: JSON.stringify({ projectId, title: tTitle, richTextDesc: tDesc, status: tStatus, priority: tPri, category: tCat, dueDate: tDue, estimatedHours: Number(tEst) || 0, assignees: tAsgn.map((id) => ({ userId: id })), dependencies: tDeps }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
-      setTaskModal(false);
+      setTaskPanel(false);
       setTTitle(""); setTDesc(""); setTDue(""); setTEst(""); setTAsgn([]); setTDeps([]);
       reloadTasks();
     } catch (e: any) { setTErr(e.message); }
@@ -137,29 +154,29 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
     e.preventDefault();
     if (!fName.trim() || !fUrl.trim()) { setFErr("Name and URL are required."); return; }
     setFBusy(true); setFErr(null);
-    try { await uploadFile(fName, fUrl, fCat); setFileModal(false); setFName(""); setFUrl(""); setFCat("Specification"); }
+    try { await uploadFile(fName, fUrl, fCat); setFilePanel(false); setFName(""); setFUrl(""); setFCat("Specification"); }
     catch (e: any) { setFErr(e.message); }
     finally { setFBusy(false); }
   };
 
   const addToProject = async (uid: string) => {
     if (project.members.includes(uid)) return;
-    const res = await fetch(`/api/projects/${projectId}`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ members: [...project.members, uid] }) });
-    if (res.ok) { reloadProject(); loadRoster(); }
+    await fetch(`/api/projects/${projectId}`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ members: [...project.members, uid] }) });
+    reloadProject(); loadRoster();
   };
 
   const removeFromProject = async (uid: string) => {
-    const res = await fetch(`/api/projects/${projectId}`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ members: project.members.filter((id) => id !== uid) }) });
-    if (res.ok) { reloadProject(); loadRoster(); }
+    await fetch(`/api/projects/${projectId}`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ members: project.members.filter((id) => id !== uid) }) });
+    reloadProject(); loadRoster();
   };
 
   const saveUserDetails = async (uid: string, current: User) => {
     setSavingUser(uid);
-    const res = await fetch(`/api/users/${uid}/details`, {
+    await fetch(`/api/users/${uid}/details`, {
       method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ role: editRoles[uid] ?? current.role, teamId: editTeams[uid] ?? current.teamId ?? "none" }),
     });
-    if (res.ok) loadRoster(); else { const d = await res.json(); alert(d.error); }
+    loadRoster();
     setSavingUser(null);
   };
 
@@ -175,11 +192,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
       {/* Cover hero */}
       <div className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden">
         <div className="relative h-40 md:h-48 bg-[#111111]">
-          <img
-            src={project.coverImageUrl || "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?w=800&q=70"}
-            alt={project.name}
-            className="w-full h-full object-cover opacity-60"
-          />
+          <img src={project.coverImageUrl || "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?w=800&q=70"} alt={project.name} className="w-full h-full object-cover opacity-60" />
           <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
           <div className="absolute bottom-4 left-5 right-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3 text-white">
             <div>
@@ -218,7 +231,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             <span className="flex items-center gap-1.5 text-[#737373] text-xs"><Users className="w-3.5 h-3.5" />Members</span>
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-[#111111]">{project.members?.length ?? 0}</span>
-              <button onClick={() => setRosterModal(true)} className="p-1 bg-[#e8edfb] text-[#0038BC] hover:bg-[#0038BC] hover:text-white rounded transition-colors">
+              <button onClick={() => setRosterPanel(true)} className="p-1 bg-[#e8edfb] text-[#0038BC] hover:bg-[#0038BC] hover:text-white rounded transition-colors">
                 <Settings className="w-3 h-3" />
               </button>
             </div>
@@ -249,7 +262,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             <span className="flex items-center gap-1.5 text-sm text-[#111111]">
               <Paperclip className="w-3.5 h-3.5 text-[#737373]" /> Files
             </span>
-            <button onClick={() => setFileModal(true)} className="text-xs text-[#0038BC] hover:underline">+ Add</button>
+            <button onClick={() => setFilePanel(true)} className="text-xs text-[#0038BC] hover:underline">+ Add</button>
           </div>
           <div className="p-3 space-y-2 max-h-64 overflow-y-auto">
             {(project.files ?? []).length > 0 ? project.files.map((f) => (
@@ -272,7 +285,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      {/* Board */}
+      {/* Task Board */}
       <div className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 border-b border-[#E8E8E8]">
           <div>
@@ -288,7 +301,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
                 </button>
               ))}
             </div>
-            <Button onClick={() => setTaskModal(true)} variant="primary" size="sm">
+            <Button onClick={() => setTaskPanel(true)} variant="primary" size="sm">
               <Plus className="w-3.5 h-3.5" /> New task
             </Button>
           </div>
@@ -308,23 +321,27 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      {/* Create task modal */}
-      <Modal isOpen={isTaskModal} onClose={() => setTaskModal(false)} title="New task" size="lg">
+      {/* ── Slide panels (replace all modals) ── */}
+
+      {/* New task panel */}
+      <SlidePanel isOpen={isTaskPanel} onClose={() => setTaskPanel(false)} title="New task" description={`Project: ${project.name}`} size="lg">
         <form onSubmit={handleCreateTask} className="space-y-4">
           {tErr && (
             <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />{tErr}
             </div>
           )}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Input label="Task title" value={tTitle} onChange={(e) => setTTitle(e.target.value)} placeholder="e.g. Implement auth" required />
-            <div className="grid grid-cols-2 gap-3">
-              <Input label="Est. hours" type="number" value={tEst} onChange={(e) => setTEst(e.target.value)} placeholder="4" />
-              <Input label="Due date" type="date" value={tDue} onChange={(e) => setTDue(e.target.value)} required />
-            </div>
+          <Input label="Task title" value={tTitle} onChange={(e) => setTTitle(e.target.value)} placeholder="e.g. Implement auth" required />
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Est. hours" type="number" value={tEst} onChange={(e) => setTEst(e.target.value)} placeholder="4" />
+            <Input label="Due date" type="date" value={tDue} onChange={(e) => setTDue(e.target.value)} required />
           </div>
           <div className="grid grid-cols-3 gap-3">
-            {([["Status", tStatus, setTStatus, ["To Do","In Progress","Review","Done"]], ["Priority", tPri, setTPri, ["Low","Medium","High","Critical"]], ["Category", tCat, setTCat, ["Development","Design","QA","Management","Billing","Others"]]] as any[]).map(([lbl, val, set, opts]) => (
+            {([
+              ["Status", tStatus, setTStatus, ["To Do","In Progress","Review","Done"]],
+              ["Priority", tPri, setTPri, ["Low","Medium","High","Critical"]],
+              ["Category", tCat, setTCat, ["Development","Design","QA","Management","Billing","Others"]],
+            ] as any[]).map(([lbl, val, set, opts]) => (
               <div key={lbl}>
                 <label className="block text-xs text-[#737373] mb-1">{lbl}</label>
                 <select value={val} onChange={(e) => set(e.target.value)} className={SEL}>
@@ -339,7 +356,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
           </div>
           <div>
             <label className="block text-xs text-[#737373] mb-1.5">Assignees</label>
-            <div className="max-h-28 overflow-y-auto border border-[#E8E8E8] rounded-lg p-2 grid grid-cols-2 gap-1.5 bg-[#F7F8FA]">
+            <div className="max-h-36 overflow-y-auto border border-[#E8E8E8] rounded-lg p-2 grid grid-cols-1 gap-1.5 bg-[#F7F8FA]">
               {users.map((u) => {
                 const sel = tAsgn.includes(u.id);
                 return (
@@ -348,7 +365,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
                     <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${sel ? "bg-[#0038BC] border-[#0038BC]" : "border-[#D0D0D0]"}`}>
                       {sel && <svg className="w-2 h-2 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                     </div>
-                    <span className="truncate text-xs">{u.name}</span>
+                    <span className="text-xs">{u.name}</span>
                   </button>
                 );
               })}
@@ -357,7 +374,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
           {tasks.filter((t) => !t.deleted).length > 0 && (
             <div>
               <label className="block text-xs text-[#737373] mb-1.5">Dependencies</label>
-              <div className="max-h-24 overflow-y-auto border border-[#E8E8E8] rounded-lg p-2 grid grid-cols-2 gap-1.5 bg-[#F7F8FA]">
+              <div className="max-h-28 overflow-y-auto border border-[#E8E8E8] rounded-lg p-2 grid grid-cols-1 gap-1.5 bg-[#F7F8FA]">
                 {tasks.filter((t) => !t.deleted).map((t) => {
                   const sel = tDeps.includes(t.id);
                   return (
@@ -374,14 +391,14 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             </div>
           )}
           <div className="flex justify-end gap-2 pt-2 border-t border-[#E8E8E8]">
-            <Button type="button" variant="outline" onClick={() => setTaskModal(false)}>Cancel</Button>
+            <Button type="button" variant="outline" onClick={() => setTaskPanel(false)}>Cancel</Button>
             <Button type="submit" variant="primary" isLoading={tBusy}>Create task</Button>
           </div>
         </form>
-      </Modal>
+      </SlidePanel>
 
-      {/* File modal */}
-      <Modal isOpen={isFileModal} onClose={() => setFileModal(false)} title="Add file">
+      {/* Add file panel */}
+      <SlidePanel isOpen={isFilePanel} onClose={() => setFilePanel(false)} title="Add file" description="Attach a document or link to this project." size="md">
         <form onSubmit={handleFileSubmit} className="space-y-4">
           {fErr && (
             <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
@@ -395,7 +412,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             className="border-2 border-dashed border-[#D0D0D0] rounded-lg p-6 text-center cursor-pointer hover:border-[#0038BC] transition-colors">
             <input id="file-inp" type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadToCloudinary(f); }} />
             <Paperclip className="w-6 h-6 text-[#A0A0A0] mx-auto mb-2" />
-            {uploading ? <p className="text-sm text-[#737373] animate-pulse">Uploading…</p> : <p className="text-sm text-[#737373]">Drop or click to upload</p>}
+            {uploading ? <p className="text-sm text-[#737373] animate-pulse">Uploading…</p> : fUrl ? <p className="text-sm text-green-600 font-medium">File uploaded ✓</p> : <p className="text-sm text-[#737373]">Drop or click to upload</p>}
             {uploadErr && <p className="text-xs text-[#EF8F00] mt-1">{uploadErr}</p>}
           </div>
           <Input label="File name" value={fName} onChange={(e) => setFName(e.target.value)} required />
@@ -407,15 +424,16 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             </select>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t border-[#E8E8E8]">
-            <Button type="button" variant="outline" onClick={() => setFileModal(false)}>Cancel</Button>
+            <Button type="button" variant="outline" onClick={() => setFilePanel(false)}>Cancel</Button>
             <Button type="submit" variant="primary" isLoading={fBusy}>Save file</Button>
           </div>
         </form>
-      </Modal>
+      </SlidePanel>
 
-      {/* Roster modal */}
-      <Modal isOpen={isRosterModal} onClose={() => setRosterModal(false)} title="Team management" size="lg">
+      {/* Team roster panel */}
+      <SlidePanel isOpen={isRosterPanel} onClose={() => setRosterPanel(false)} title="Team management" description={`Manage members for ${project.name}`} size="xl">
         <div className="space-y-5">
+          {/* Invite link */}
           <div className="p-4 bg-[#F7F8FA] border border-[#E8E8E8] rounded-xl space-y-3">
             <div className="flex items-center gap-2">
               <Link className="w-3.5 h-3.5 text-[#0038BC]" />
@@ -444,13 +462,14 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             </div>
           </div>
 
+          {/* Current members */}
           <div>
             <p className="text-sm font-medium text-[#111111] mb-2">Current members ({project.members?.length ?? 0})</p>
-            <div className="space-y-2 max-h-52 overflow-y-auto">
+            <div className="space-y-2 max-h-64 overflow-y-auto">
               {users.filter((u) => project.members?.includes(u.id)).map((u) => (
                 <div key={u.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 border border-[#E8E8E8] rounded-lg bg-white">
                   <div>
-                    <p className="text-sm text-[#111111]">{u.name}</p>
+                    <p className="text-sm text-[#111111] font-medium">{u.name}</p>
                     <p className="text-xs text-[#737373]">@{u.username}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -476,29 +495,26 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             </div>
           </div>
 
+          {/* Add members */}
           <div>
             <p className="text-sm font-medium text-[#111111] mb-2">Add members</p>
-            <div className="max-h-32 overflow-y-auto border border-[#E8E8E8] rounded-lg p-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5 bg-[#F7F8FA]">
+            <div className="max-h-40 overflow-y-auto border border-[#E8E8E8] rounded-lg p-2 grid grid-cols-1 gap-1.5 bg-[#F7F8FA]">
               {users.filter((u) => !project.members?.includes(u.id)).map((u) => (
                 <div key={u.id} className="flex items-center justify-between p-2 bg-white border border-[#E8E8E8] rounded-lg">
                   <div>
-                    <p className="text-sm text-[#111111]">{u.name}</p>
+                    <p className="text-sm text-[#111111] font-medium">{u.name}</p>
                     <p className="text-xs text-[#737373]">@{u.username}</p>
                   </div>
-                  <button onClick={() => addToProject(u.id)} className="text-xs text-[#0038BC] hover:underline">+ Add</button>
+                  <button onClick={() => addToProject(u.id)} className="text-xs text-[#0038BC] hover:underline font-medium">+ Add</button>
                 </div>
               ))}
               {users.filter((u) => !project.members?.includes(u.id)).length === 0 && (
-                <p className="text-xs text-[#A0A0A0] text-center py-2 col-span-full">All users already added.</p>
+                <p className="text-xs text-[#A0A0A0] text-center py-2">All users already added.</p>
               )}
             </div>
           </div>
-
-          <div className="flex justify-end pt-2 border-t border-[#E8E8E8]">
-            <Button onClick={() => setRosterModal(false)} variant="primary">Done</Button>
-          </div>
         </div>
-      </Modal>
+      </SlidePanel>
     </div>
   );
 }

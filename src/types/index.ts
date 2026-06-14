@@ -37,7 +37,7 @@ export interface Team {
   id: string;
   name: string;
   description: string;
-  leadId: string; // User ID
+  leadId: string;
   membersCount: number;
 }
 
@@ -60,7 +60,7 @@ export interface Project {
   coverImageUrl?: string;
   ownerId: string;
   tags: string[];
-  members: string[]; // User IDs
+  members: string[];
   files: ProjectFile[];
   deleted?: boolean;
   deletedAt?: string;
@@ -82,6 +82,14 @@ export interface TaskAssignee {
   teamId?: string;
 }
 
+/** A lightweight sub-task item stored inside a parent Task */
+export interface SubTask {
+  id: string;
+  title: string;
+  completed: boolean;
+  createdAt: string;
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -95,6 +103,7 @@ export interface Task {
   estimatedHours: number;
   assignees: TaskAssignee[];
   timeLogs: TimeLog[];
+  subTasks?: SubTask[];
   dependencies?: string[];
   deleted?: boolean;
   deletedAt?: string;
@@ -106,7 +115,7 @@ export interface Comment {
   userId: string;
   userName: string;
   userRole: string;
-  content: string; // TipTap Rich Editor output (HTML/Text)
+  content: string;
   createdAt: string;
 }
 
@@ -131,16 +140,16 @@ export interface Activity {
 }
 
 export interface Invitation {
-  id: string; // The token e.g. "inv_xxxxxx"
-  createdBy: string; // User ID who generated it
+  id: string;
+  createdBy: string;
   creatorName?: string;
   email?: string;
   role: Role;
   teamId?: string;
   teamName?: string;
-  expiresAt: string; // ISO date string (7 days from creation)
+  expiresAt: string;
   usedCount: number;
-  usedLimit: number; // 0 for unlimited, or e.g. 1, 5, 10
+  usedLimit: number;
   plan: "Free" | "Paid" | "Enterprise";
   status: "active" | "expired" | "used_up";
   createdAt: string;

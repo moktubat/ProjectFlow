@@ -1,23 +1,31 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import React, { useState, useEffect } from "react";
 import { useUIStore } from "../../store/ui-store.js";
+import { usePageTitle } from "../../hooks/usePageTitle.js";
 import { Button } from "../ui/Button.js";
 import { Input } from "../ui/Input.js";
-import { Modal } from "../ui/Modal.js";
+import { SlidePanel } from "../ui/SlidePanel.js";
 import { Team, User, Role } from "../../types/index.js";
 import { Users, Plus, Trash2, AlertCircle, UsersRound } from "lucide-react";
 
 export function TeamsView() {
+  usePageTitle("Teams", "Manage your workspace teams and assign members to squads in ProjectFlow.");
+
   const token = useUIStore((s) => s.token);
-  const user = useUIStore((s) => s.user);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
+  const user  = useUIStore((s) => s.user);
+  const [teams, setTeams]   = useState<Team[]>([]);
+  const [users, setUsers]   = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isOpen, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [name, setName]     = useState("");
+  const [desc, setDesc]     = useState("");
   const [leadId, setLeadId] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [err, setErr]       = useState<string | null>(null);
+  const [busy, setBusy]     = useState(false);
 
   const load = async () => {
     if (!token) return;
@@ -33,6 +41,8 @@ export function TeamsView() {
 
   useEffect(() => { load(); }, [token]);
 
+  const resetForm = () => { setName(""); setDesc(""); setLeadId(""); setErr(null); };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !leadId) { setErr("Name and team lead are required."); return; }
@@ -44,7 +54,9 @@ export function TeamsView() {
         body: JSON.stringify({ name, description: desc, leadId }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
-      setName(""); setDesc(""); setLeadId(""); setOpen(false); load();
+      resetForm();
+      setIsPanelOpen(false);
+      load();
     } catch (e: any) { setErr(e.message); }
     finally { setBusy(false); }
   };
@@ -58,6 +70,8 @@ export function TeamsView() {
   const canManage = user && [Role.SUPER_ADMIN, Role.ADMIN, Role.PROJECT_MANAGER].includes(user.role);
   const getLeadName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
 
+  const SEL = "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/10 focus:border-[#0038BC]";
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-[#E8E8E8] rounded-xl px-4 py-3.5">
@@ -66,7 +80,7 @@ export function TeamsView() {
           <p className="text-sm text-[#737373] mt-0.5">Organize members into teams</p>
         </div>
         {canManage && (
-          <Button onClick={() => setOpen(true)} variant="primary" size="sm">
+          <Button onClick={() => setIsPanelOpen(true)} variant="primary" size="sm">
             <Plus className="w-3.5 h-3.5" /> New team
           </Button>
         )}
@@ -116,7 +130,14 @@ export function TeamsView() {
         </div>
       )}
 
-      <Modal isOpen={isOpen} onClose={() => setOpen(false)} title="New team">
+      {/* New team slide panel */}
+      <SlidePanel
+        isOpen={isPanelOpen}
+        onClose={() => { setIsPanelOpen(false); resetForm(); }}
+        title="New team"
+        description="Create a team and assign a lead."
+        size="sm"
+      >
         <form onSubmit={handleCreate} className="space-y-4">
           {err && (
             <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
@@ -131,8 +152,7 @@ export function TeamsView() {
           </div>
           <div>
             <label className="block text-xs text-[#737373] mb-1">Team lead *</label>
-            <select value={leadId} onChange={(e) => setLeadId(e.target.value)} required
-              className="w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/10 focus:border-[#0038BC]">
+            <select value={leadId} onChange={(e) => setLeadId(e.target.value)} required className={SEL}>
               <option value="">Select a lead…</option>
               {users.filter((u) => u.status === "APPROVED").map((u) => (
                 <option key={u.id} value={u.id}>{u.name} (@{u.username})</option>
@@ -140,11 +160,11 @@ export function TeamsView() {
             </select>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t border-[#E8E8E8]">
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button type="button" variant="outline" onClick={() => { setIsPanelOpen(false); resetForm(); }}>Cancel</Button>
             <Button type="submit" variant="primary" isLoading={busy}>Create team</Button>
           </div>
         </form>
-      </Modal>
+      </SlidePanel>
     </div>
   );
 }

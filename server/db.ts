@@ -135,17 +135,15 @@ const TaskSchema = new mongoose.Schema({
   category: { type: String, required: true },
   dueDate: { type: String, required: true },
   estimatedHours: { type: Number, default: 0 },
-  assignees: [{
-    userId: String,
-    teamId: String
-  }],
+  assignees: [{ userId: String, teamId: String }],
   timeLogs: [{
+    id: String, userId: String, hours: Number, note: String,
+    startTime: String, endTime: String, createdAt: String
+  }],
+  subTasks: [{
     id: String,
-    userId: String,
-    hours: Number,
-    note: String,
-    startTime: String,
-    endTime: String,
+    title: String,
+    completed: { type: Boolean, default: false },
     createdAt: String
   }],
   dependencies: [String],
