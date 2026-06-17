@@ -13,27 +13,18 @@ export function useTasks(projectId?: string) {
   const [error, setError] = useState<string | null>(null);
   const token = useUIStore((state) => state.token);
 
-  const fetchTasks = useCallback(async () => {
+  const fetchTasks = useCallback(async (silent = false) => {
     if (!token) return;
-    setIsLoading(true);
-    setError(null);
+    if (!silent) { setIsLoading(true); setError(null); }
     try {
       const url = projectId ? `/api/tasks?projectId=${projectId}` : "/api/tasks";
-      const res = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      if (!res.ok) {
-        const errObj = await res.json().catch(() => ({}));
-        throw new Error(errObj.error || "Failed to load tasks.");
-      }
-      const data = await res.json();
-      setTasks(data);
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) { const errObj = await res.json().catch(() => ({})); throw new Error(errObj.error || "Failed to load tasks."); }
+      setTasks(await res.json());
     } catch (err: any) {
-      setError(err.message || "An unexpected error occurred");
+      if (!silent) setError(err.message || "An unexpected error occurred");
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }, [token, projectId]);
 

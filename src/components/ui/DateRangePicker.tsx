@@ -1,4 +1,4 @@
-import React, { forwardRef } from "react";
+import React, { forwardRef, useEffect, useState } from "react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import { Calendar, X } from "lucide-react";
@@ -63,11 +63,33 @@ export function DateRangePicker({
   label,
   className = "",
 }: DateRangePickerProps) {
+
+  const [draft, setDraft] = useState<[Date | null, Date | null]>([
+    toDate(value.start),
+    toDate(value.end),
+  ]);
+
+
   const startDate = toDate(value.start);
   const endDate = toDate(value.end);
 
+
+  useEffect(() => {
+    setDraft([toDate(value.start), toDate(value.end)]);
+  }, [value.start, value.end]);
+
+  const [draftStart, draftEnd] = draft;
+
   const handleChange = ([start, end]: [Date | null, Date | null]) => {
-    onChange({ start: fromDate(start), end: fromDate(end) });
+    setDraft([start, end]);
+    if (start && end) {
+      onChange({ start: fromDate(start), end: fromDate(end) });
+    }
+  };
+
+  const handleClear = () => {
+    setDraft([null, null]);
+    onChange({ start: "", end: "" });
   };
 
   return (
@@ -77,24 +99,25 @@ export function DateRangePicker({
       )}
       <DatePicker
         selectsRange
-        startDate={startDate ?? undefined}
-        endDate={endDate ?? undefined}
+        startDate={draftStart ?? undefined}
+        endDate={draftEnd ?? undefined}
         onChange={handleChange}
         dateFormat="MM/dd/yy"
         placeholderText="Start date"
         customInput={
           <CustomInput
             placeholder="MM/DD/YY – MM/DD/YY"
-            onClear={() => onChange({ start: "", end: "" })}
+            onClear={handleClear}
             value={
-              value.start
-                ? `${format(toDate(value.start)!, "MM/dd/yy")}${value.end ? " – " + format(toDate(value.end)!, "MM/dd/yy") : ""}`
+              draftStart
+                ? `${format(draftStart, "MM/dd/yy")}${draftEnd ? " – " + format(draftEnd, "MM/dd/yy") : ""}`
                 : undefined
             }
           />
         }
         popperPlacement="bottom-start"
         popperClassName="z-50"
+        portalId="datepicker-portal"
         wrapperClassName="w-full"
         isClearable={false}
         monthsShown={1}
@@ -143,6 +166,7 @@ export function SingleDatePicker({
           />
         }
         popperPlacement="bottom-start"
+        portalId="datepicker-portal"
         popperClassName="z-50"
         wrapperClassName="w-full"
         isClearable={false}

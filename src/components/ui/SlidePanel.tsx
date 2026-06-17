@@ -64,8 +64,8 @@ export function SlidePanel({
         <>
             {/* Backdrop */}
             <div
-                className={`fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity duration-300 ${isOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
-                    }`}
+                className={`fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity duration-300 ${isOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+                style={{ height: "100dvh" }}
                 aria-hidden="true"
                 onClick={onClose}
             />
@@ -76,13 +76,14 @@ export function SlidePanel({
                 role="dialog"
                 aria-modal="true"
                 aria-label={title}
+                style={{ height: "100dvh" }}
                 className={`
-                    fixed inset-y-0 right-0 z-50 flex flex-col
-                    bg-white shadow-2xl border-l border-[#E8E8E8]
-                    transform transition-transform duration-300 ease-in-out
-                    ${SIZE_CLASSES[size]}
-                    ${isOpen ? "translate-x-0" : "translate-x-full"}
-                `}
+        fixed inset-y-0 right-0 z-50 flex flex-col
+        bg-white shadow-2xl border-l border-[#E8E8E8]
+        transform transition-transform duration-300 ease-in-out
+        ${SIZE_CLASSES[size]}
+        ${isOpen ? "translate-x-0" : "translate-x-full"}
+    `}
             >
                 {/* Header */}
                 <div className="flex items-start justify-between px-5 py-4 border-b border-[#E8E8E8] bg-white shrink-0">

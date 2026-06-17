@@ -205,19 +205,12 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   // ── Inline title save ──
   const handleSaveTitle = async (name: string) => {
     await updateProject({ name });
-    reloadProject();
   };
 
   // ── Inline date save ──
-  // react-datepicker (selectsRange) fires onChange after the FIRST click too
-  // (start set, end still ""). Only persist + reload once a COMPLETE range is
-  // chosen — otherwise reloadProject() would immediately overwrite the
-  // in-progress selection with the old saved dates, making it look like
-  // clicking a date "does nothing."
   const handleSaveDates = async (start: string, end: string) => {
     if (!start || !end) return;
     await updateProject({ startDate: start, endDate: end });
-    reloadProject();
   };
 
   // ── Description editing ──
@@ -226,7 +219,6 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
     await updateProject({ richTextDescription: descDraft });
     setDescSaving(false);
     setEditingDesc(false);
-    reloadProject();
   };
 
   // ── AI description via Gemini ──
@@ -602,8 +594,8 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
             </div>
           ) : (
             <>
-              {viewMode === "kanban" && <KanbanBoard tasks={tasks} users={users} onTaskUpdated={() => { reloadProject(); reloadTasks(); }} />}
-              {viewMode === "gantt" && <ProjectGanttChart tasks={tasks} users={users} project={project} onTaskUpdated={() => { reloadProject(); reloadTasks(); }} />}
+              {viewMode === "kanban" && <KanbanBoard tasks={tasks} users={users} onTaskUpdated={() => reloadTasks()} />}
+              {viewMode === "gantt" && <ProjectGanttChart tasks={tasks} users={users} project={project} onTaskUpdated={() => reloadTasks()} />}
               {viewMode === "analytics" && <ProjectSprintAnalytics tasks={tasks} users={users} project={project} />}
             </>
           )}
