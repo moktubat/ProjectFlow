@@ -1,9 +1,4 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useProject } from "../../hooks/useProject.js";
 import { useTasks } from "../../hooks/useTasks.js";
 import { useUIStore } from "../../store/ui-store.js";
@@ -16,22 +11,97 @@ import { KanbanBoard } from "../kanban/KanbanBoard.js";
 import { TipTapEditor } from "../editor/TipTapEditor.js";
 import { ProjectGanttChart } from "../project/ProjectGanttChart.js";
 import { ProjectSprintAnalytics } from "../project/ProjectSprintAnalytics.js";
+import { DateRangePicker } from "../ui/DateRangePicker.js";
 import { User } from "../../types/index.js";
 import {
   Plus, Calendar, FileSpreadsheet, Trash2, Paperclip, Users,
   ArrowLeft, TrendingUp, Clock, Download, Settings, Link,
-  Copy, Check, AlertCircle,
+  Copy, Check, AlertCircle, Pencil, X, Sparkles, ImageIcon, Save,
 } from "lucide-react";
 
 const SEL = "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:border-[#0038BC] focus:ring-2 focus:ring-[#0038BC]/10";
 
+// ─── Inline-editable field ────────────────────────────────────────────────────
+function InlineEditText({
+  value,
+  onSave,
+  className = "",
+  inputClassName = "",
+  placeholder = "Click to edit…",
+  as: Tag = "h2",
+}: {
+  value: string;
+  onSave: (v: string) => Promise<void>;
+  className?: string;
+  inputClassName?: string;
+  placeholder?: string;
+  as?: keyof JSX.IntrinsicElements;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+
+  const commit = async () => {
+    if (!draft.trim() || draft === value) { setEditing(false); return; }
+    setSaving(true);
+    await onSave(draft.trim());
+    setSaving(false);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-2 w-full">
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") { setDraft(value); setEditing(false); }
+          }}
+          className={`flex-1 bg-transparent border-b-2 border-white focus:outline-none ${inputClassName}`}
+          placeholder={placeholder}
+        />
+        <button onClick={commit} disabled={saving} className="p-1 bg-white/20 hover:bg-white/30 rounded transition-colors">
+          {saving ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Check className="w-3.5 h-3.5 text-white" />}
+        </button>
+        <button onClick={() => { setDraft(value); setEditing(false); }} className="p-1 hover:bg-white/20 rounded transition-colors">
+          <X className="w-3.5 h-3.5 text-white/70" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`group flex items-center gap-2 cursor-pointer ${className}`} onClick={() => { setDraft(value); setEditing(true); }}>
+      <Tag className="leading-tight">{value || placeholder}</Tag>
+      <Pencil className="w-3.5 h-3.5 text-white/50 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5" />
+    </div>
+  );
+}
+
+// ─── Gemini AI description generator ─────────────────────────────────────────
+async function generateWithGemini(prompt: string): Promise<string> {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${(import.meta as any).env?.VITE_GEMINI_API_KEY || ""}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    }
+  );
+  if (!res.ok) throw new Error("Gemini API error: " + res.status);
+  const data = await res.json();
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+}
+
 export function ProjectDetailsView({ projectId }: { projectId: string }) {
-  const { project, isLoading: projLoading, error: projError, refresh: reloadProject, deleteProject, uploadFile } = useProject(projectId);
+  const { project, isLoading: projLoading, error: projError, refresh: reloadProject, updateProject, deleteProject, uploadFile } = useProject(projectId);
   const { tasks, isLoading: tasksLoading, refresh: reloadTasks } = useTasks(projectId);
   const token = useUIStore((s) => s.token);
   const navigate = useUIStore((s) => s.navigate);
 
-  // Dynamic page title based on loaded project
   usePageTitle(
     project ? project.name : "Project",
     project ? `${project.name} — tasks, progress, and team in ProjectFlow.` : undefined
@@ -46,6 +116,19 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const [isTaskPanel, setTaskPanel] = useState(false);
   const [isFilePanel, setFilePanel] = useState(false);
   const [isRosterPanel, setRosterPanel] = useState(false);
+
+  // ── Inline description editing ──
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
+  const [descSaving, setDescSaving] = useState(false);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [showAiPrompt, setShowAiPrompt] = useState(false);
+
+  // ── Inline cover image editing ──
+  const [editingCover, setEditingCover] = useState(false);
+  const [coverDraft, setCoverDraft] = useState("");
+  const [coverUploading, setCoverUploading] = useState(false);
 
   // Task form
   const [tTitle, setTTitle] = useState("");
@@ -119,6 +202,73 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
     try { await deleteProject(); navigate("projects"); } catch (e: any) { alert(e.message); }
   };
 
+  // ── Inline title save ──
+  const handleSaveTitle = async (name: string) => {
+    await updateProject({ name });
+    reloadProject();
+  };
+
+  // ── Inline date save ──
+  // react-datepicker (selectsRange) fires onChange after the FIRST click too
+  // (start set, end still ""). Only persist + reload once a COMPLETE range is
+  // chosen — otherwise reloadProject() would immediately overwrite the
+  // in-progress selection with the old saved dates, making it look like
+  // clicking a date "does nothing."
+  const handleSaveDates = async (start: string, end: string) => {
+    if (!start || !end) return;
+    await updateProject({ startDate: start, endDate: end });
+    reloadProject();
+  };
+
+  // ── Description editing ──
+  const handleSaveDesc = async () => {
+    setDescSaving(true);
+    await updateProject({ richTextDescription: descDraft });
+    setDescSaving(false);
+    setEditingDesc(false);
+    reloadProject();
+  };
+
+  // ── AI description via Gemini ──
+  const handleAiGenerate = async () => {
+    if (!aiPrompt.trim()) return;
+    setAiGenerating(true);
+    try {
+      const text = await generateWithGemini(
+        `Write a professional project description for a software project management tool. 
+Project name: "${project.name}"
+Additional context: ${aiPrompt}
+Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Use plain text, no markdown.`
+      );
+      setDescDraft(text);
+      setShowAiPrompt(false);
+      setAiPrompt("");
+    } catch (e: any) {
+      alert("AI generation failed: " + e.message);
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
+  // ── Cover image ──
+  const uploadCoverToCloudinary = async (file: File) => {
+    setCoverUploading(true);
+    try {
+      const b64 = await new Promise<string>((ok, rej) => { const r = new FileReader(); r.onload = () => ok(r.result as string); r.onerror = rej; r.readAsDataURL(file); });
+      const res = await fetch("/api/cloudinary/upload", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ base64Data: b64, filename: file.name }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setCoverDraft(data.url);
+    } catch (e: any) { alert(e.message); }
+    finally { setCoverUploading(false); }
+  };
+
+  const handleSaveCover = async () => {
+    await updateProject({ coverImageUrl: coverDraft });
+    setEditingCover(false);
+    reloadProject();
+  };
+
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tTitle.trim() || !tDue) { setTErr("Title and due date are required."); return; }
@@ -189,19 +339,78 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
         <ArrowLeft className="w-4 h-4" /> Back to projects
       </button>
 
-      {/* Cover hero */}
+      {/* Cover hero — everything inline-editable */}
       <div className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden">
-        <div className="relative h-40 md:h-48 bg-[#111111]">
-          <img src={project.coverImageUrl || "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?w=800&q=70"} alt={project.name} className="w-full h-full object-cover opacity-60" />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
-          <div className="absolute bottom-4 left-5 right-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3 text-white">
-            <div>
-              <p className="text-xs text-white/60 mb-1 flex items-center gap-1">
-                <Calendar className="w-3 h-3" />{project.startDate} – {project.endDate}
-              </p>
-              <h2 className="text-lg font-semibold">{project.name}</h2>
+        <div className="relative h-40 md:h-52 bg-[#111111] group">
+          {editingCover ? (
+            <div className="absolute inset-0 z-10 bg-black/80 flex flex-col items-center justify-center gap-3 p-4">
+              <p className="text-white text-sm font-medium">Update cover image</p>
+              <div
+                className="border-2 border-dashed border-white/40 rounded-xl p-4 w-full max-w-xs text-center cursor-pointer hover:border-white/70 transition-colors"
+                onClick={() => document.getElementById("cover-edit-inp")?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCoverToCloudinary(f); }}
+              >
+                <input id="cover-edit-inp" type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCoverToCloudinary(f); }} />
+                {coverUploading ? <p className="text-white/70 text-sm animate-pulse">Uploading…</p> :
+                  coverDraft ? <p className="text-green-400 text-sm font-medium">Image ready ✓</p> :
+                  <p className="text-white/60 text-sm">Drop or click to upload</p>}
+              </div>
+              <Input
+                value={coverDraft}
+                onChange={(e) => setCoverDraft(e.target.value)}
+                placeholder="Or paste image URL…"
+                className="max-w-xs text-sm"
+              />
+              <div className="flex gap-2">
+                <Button size="sm" variant="primary" onClick={handleSaveCover} disabled={!coverDraft}>Save</Button>
+                <Button size="sm" variant="outline" className="bg-white/10 border-white/30 text-white hover:bg-white/20" onClick={() => setEditingCover(false)}>Cancel</Button>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
+          ) : null}
+
+          <img
+            src={project.coverImageUrl || "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?w=800&q=70"}
+            alt={project.name}
+            className="w-full h-full object-cover opacity-60"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+
+          {/* Edit cover button — top right */}
+          {!editingCover && (
+            <button
+              onClick={() => { setCoverDraft(project.coverImageUrl || ""); setEditingCover(true); }}
+              className="absolute top-3 right-3 flex items-center gap-1.5 px-2.5 py-1.5 bg-black/40 hover:bg-black/60 text-white text-xs rounded-lg backdrop-blur-sm transition-colors opacity-0 group-hover:opacity-100"
+            >
+              <ImageIcon className="w-3 h-3" /> Change cover
+            </button>
+          )}
+
+          <div className="absolute bottom-4 left-5 right-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              {/* Inline-editable date range —
+                  capped to a compact pill width so it doesn't stretch full
+                  hero-bleed; the calendar itself now renders via a portal
+                  (see DateRangePicker) so it isn't clipped by this hero's
+                  overflow-hidden / fixed height. */}
+              <div className="mb-2 max-w-[220px]">
+                <DateRangePicker
+                  value={{ start: project.startDate, end: project.endDate }}
+                  onChange={({ start, end }) => handleSaveDates(start, end)}
+                />
+              </div>
+
+              {/* Inline-editable title */}
+              <InlineEditText
+                value={project.name}
+                onSave={handleSaveTitle}
+                as="h2"
+                className="text-white"
+                inputClassName="text-xl font-semibold text-white"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
               <Button onClick={exportCSV} variant="outline" size="sm" className="bg-white/10 border-white/20 text-white hover:bg-white/20">
                 <FileSpreadsheet className="w-3.5 h-3.5" /> Export CSV
               </Button>
@@ -251,9 +460,89 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             ))}
           </div>
           <div className="p-4">
-            {detailTab === "charter"
-              ? <div className="prose prose-sm max-w-none text-[#525252]" dangerouslySetInnerHTML={{ __html: project.richTextDescription || "<p>No description provided.</p>" }} />
-              : <ActivityStream projectId={projectId} />}
+            {detailTab === "charter" ? (
+              <div>
+                {!editingDesc ? (
+                  <div className="group">
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-xs text-[#737373] font-medium uppercase tracking-wide">Project description</p>
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => { setDescDraft(project.richTextDescription || ""); setEditingDesc(true); }}
+                          className="flex items-center gap-1 text-xs text-[#737373] hover:text-[#0038BC] hover:bg-[#e8edfb] px-2 py-1 rounded-lg transition-colors"
+                        >
+                          <Pencil className="w-3 h-3" /> Edit
+                        </button>
+                      </div>
+                    </div>
+                    {project.richTextDescription ? (
+                      <div
+                        className="prose prose-sm max-w-none text-[#525252]"
+                        dangerouslySetInnerHTML={{ __html: project.richTextDescription }}
+                      />
+                    ) : (
+                      <button
+                        onClick={() => { setDescDraft(""); setEditingDesc(true); }}
+                        className="w-full py-8 border-2 border-dashed border-[#E8E8E8] rounded-xl text-sm text-[#A0A0A0] hover:border-[#0038BC] hover:text-[#0038BC] transition-colors"
+                      >
+                        + Add project description
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium text-[#111111]">Edit description</p>
+                      <button
+                        onClick={() => setShowAiPrompt(!showAiPrompt)}
+                        className="flex items-center gap-1.5 text-xs text-[#EF8F00] hover:text-[#d67f00] font-medium px-2 py-1 bg-[#fef3dc] hover:bg-[#fde8b0] rounded-lg transition-colors"
+                      >
+                        <Sparkles className="w-3 h-3" /> AI Generate
+                      </button>
+                    </div>
+
+                    {showAiPrompt && (
+                      <div className="p-3 bg-[#fef3dc] border border-[#EF8F00]/20 rounded-xl space-y-2">
+                        <p className="text-xs font-medium text-[#9a5b00]">Describe what you want AI to write:</p>
+                        <textarea
+                          rows={2}
+                          value={aiPrompt}
+                          onChange={(e) => setAiPrompt(e.target.value)}
+                          placeholder="e.g. A cloud migration project for Q4, moving 3 services to AWS with zero downtime…"
+                          className="w-full px-3 py-2 bg-white border border-[#EF8F00]/30 rounded-lg text-sm focus:outline-none focus:border-[#EF8F00] resize-none"
+                        />
+                        <div className="flex gap-2 justify-end">
+                          <Button size="sm" variant="outline" onClick={() => setShowAiPrompt(false)}>Cancel</Button>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            isLoading={aiGenerating}
+                            onClick={handleAiGenerate}
+                          >
+                            <Sparkles className="w-3 h-3" /> Generate
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    <TipTapEditor
+                      value={descDraft}
+                      onChange={setDescDraft}
+                      projectId={projectId}
+                      placeholder="Describe the project goals and scope…"
+                    />
+                    <div className="flex gap-2 pt-1">
+                      <Button size="sm" variant="primary" isLoading={descSaving} onClick={handleSaveDesc}>
+                        <Save className="w-3.5 h-3.5" /> Save description
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setEditingDesc(false)}>Cancel</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <ActivityStream projectId={projectId} />
+            )}
           </div>
         </div>
 
@@ -321,7 +610,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      {/* ── Slide panels (replace all modals) ── */}
+      {/* ── Slide panels ── */}
 
       {/* New task panel */}
       <SlidePanel isOpen={isTaskPanel} onClose={() => setTaskPanel(false)} title="New task" description={`Project: ${project.name}`} size="lg">
@@ -433,7 +722,6 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
       {/* Team roster panel */}
       <SlidePanel isOpen={isRosterPanel} onClose={() => setRosterPanel(false)} title="Team management" description={`Manage members for ${project.name}`} size="xl">
         <div className="space-y-5">
-          {/* Invite link */}
           <div className="p-4 bg-[#F7F8FA] border border-[#E8E8E8] rounded-xl space-y-3">
             <div className="flex items-center gap-2">
               <Link className="w-3.5 h-3.5 text-[#0038BC]" />
@@ -462,7 +750,6 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             </div>
           </div>
 
-          {/* Current members */}
           <div>
             <p className="text-sm font-medium text-[#111111] mb-2">Current members ({project.members?.length ?? 0})</p>
             <div className="space-y-2 max-h-64 overflow-y-auto">
@@ -495,7 +782,6 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
             </div>
           </div>
 
-          {/* Add members */}
           <div>
             <p className="text-sm font-medium text-[#111111] mb-2">Add members</p>
             <div className="max-h-40 overflow-y-auto border border-[#E8E8E8] rounded-lg p-2 grid grid-cols-1 gap-1.5 bg-[#F7F8FA]">
