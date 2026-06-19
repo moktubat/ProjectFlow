@@ -10,22 +10,34 @@ import { Button } from "../ui/Button.js";
 import { Input } from "../ui/Input.js";
 import { SlidePanel } from "../ui/SlidePanel.js";
 import { Team, User, Role } from "../../types/index.js";
-import { Users, Plus, Trash2, AlertCircle, UsersRound } from "lucide-react";
+import { Users, Plus, Trash2, AlertCircle, UsersRound, Pencil } from "lucide-react";
 
 export function TeamsView() {
   usePageTitle("Teams", "Manage your workspace teams and assign members to squads in ProjectFlow.");
 
   const token = useUIStore((s) => s.token);
-  const user  = useUIStore((s) => s.user);
-  const [teams, setTeams]   = useState<Team[]>([]);
-  const [users, setUsers]   = useState<User[]>([]);
+  const user = useUIStore((s) => s.user);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Create panel
   const [isPanelOpen, setIsPanelOpen] = useState(false);
-  const [name, setName]     = useState("");
-  const [desc, setDesc]     = useState("");
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
   const [leadId, setLeadId] = useState("");
-  const [err, setErr]       = useState<string | null>(null);
-  const [busy, setBusy]     = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Edit panel
+  const [editingTeam, setEditingTeam] = useState<Team | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editLeadId, setEditLeadId] = useState("");
+  const [editErr, setEditErr] = useState<string | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [addMemberId, setAddMemberId] = useState("");
+  const [memberBusy, setMemberBusy] = useState<string | null>(null);
 
   const load = async () => {
     if (!token) return;
@@ -70,7 +82,83 @@ export function TeamsView() {
   const canManage = user && [Role.SUPER_ADMIN, Role.ADMIN, Role.PROJECT_MANAGER].includes(user.role);
   const getLeadName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
 
+  // ── Edit panel logic ──
+  const openEdit = (team: Team) => {
+    setEditingTeam(team);
+    setEditName(team.name);
+    setEditDesc(team.description || "");
+    setEditLeadId(team.leadId);
+    setEditErr(null);
+    setAddMemberId("");
+  };
+
+  const closeEdit = () => {
+    setEditingTeam(null);
+    setEditErr(null);
+  };
+
+  const handleUpdateTeam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTeam) return;
+    if (!editName.trim() || !editLeadId) { setEditErr("Name and team lead are required."); return; }
+    setEditBusy(true); setEditErr(null);
+    try {
+      const res = await fetch(`/api/teams/${editingTeam.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: editName.trim(), description: editDesc, leadId: editLeadId }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      const updated = await res.json();
+      setEditingTeam(updated);
+      load();
+    } catch (e: any) { setEditErr(e.message); }
+    finally { setEditBusy(false); }
+  };
+
+  const refreshUsers = async () => {
+    const refreshed = await fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } });
+    if (refreshed.ok) setUsers(await refreshed.json());
+  };
+
+  const addMember = async (uid: string) => {
+    if (!editingTeam || !uid) return;
+    setMemberBusy(uid);
+    try {
+      const res = await fetch(`/api/users/${uid}/details`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ teamId: editingTeam.id }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      await refreshUsers();
+      setAddMemberId("");
+      load();
+    } catch (e: any) { setEditErr(e.message); }
+    finally { setMemberBusy(null); }
+  };
+
+  const removeMember = async (uid: string) => {
+    if (!editingTeam) return;
+    if (!confirm("Remove this member from the team?")) return;
+    setMemberBusy(uid);
+    try {
+      const res = await fetch(`/api/users/${uid}/details`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ teamId: "none" }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      await refreshUsers();
+      load();
+    } catch (e: any) { setEditErr(e.message); }
+    finally { setMemberBusy(null); }
+  };
+
   const SEL = "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/10 focus:border-[#0038BC]";
+
+  const teamMembers = editingTeam ? users.filter((u) => u.teamId === editingTeam.id) : [];
+  const nonMembers = editingTeam ? users.filter((u) => u.status === "APPROVED" && u.teamId !== editingTeam.id) : [];
 
   return (
     <div className="space-y-4">
@@ -102,9 +190,14 @@ export function TeamsView() {
                   <h3 className="text-sm font-medium text-[#111111]">{t.name}</h3>
                 </div>
                 {canManage && (
-                  <button onClick={() => handleDelete(t.id)} className="p-1.5 text-[#A0A0A0] hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => openEdit(t)} className="p-1.5 text-[#A0A0A0] hover:text-[#0038BC] hover:bg-[#e8edfb] rounded-lg transition-colors">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={() => handleDelete(t.id)} className="p-1.5 text-[#A0A0A0] hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 )}
               </div>
               <p className="text-sm text-[#737373] mb-4 line-clamp-2 min-h-[2.5rem]">{t.description || "No description."}</p>
@@ -164,6 +257,99 @@ export function TeamsView() {
             <Button type="submit" variant="primary" isLoading={busy}>Create team</Button>
           </div>
         </form>
+      </SlidePanel>
+
+      {/* Edit team slide panel */}
+      <SlidePanel
+        isOpen={!!editingTeam}
+        onClose={closeEdit}
+        title="Edit team"
+        description={editingTeam ? `Manage details and members for ${editingTeam.name}` : undefined}
+        size="lg"
+      >
+        {editingTeam && (
+          <div className="space-y-5">
+            {editErr && (
+              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />{editErr}
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateTeam} className="space-y-4">
+              <Input label="Team name" value={editName} onChange={(e) => setEditName(e.target.value)} required />
+              <div>
+                <label className="block text-xs text-[#737373] mb-1">Description</label>
+                <textarea rows={3} value={editDesc} onChange={(e) => setEditDesc(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm placeholder:text-[#A0A0A0] focus:outline-none focus:ring-2 focus:ring-[#0038BC]/10 focus:border-[#0038BC] resize-none" />
+              </div>
+              <div>
+                <label className="block text-xs text-[#737373] mb-1">Team lead *</label>
+                <select value={editLeadId} onChange={(e) => setEditLeadId(e.target.value)} required className={SEL}>
+                  {users.filter((u) => u.status === "APPROVED").map((u) => (
+                    <option key={u.id} value={u.id}>{u.name} (@{u.username})</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="submit" variant="primary" isLoading={editBusy}>Save changes</Button>
+              </div>
+            </form>
+
+            <div className="pt-4 border-t border-[#E8E8E8]">
+              <p className="text-sm font-medium text-[#111111] mb-2">Members ({teamMembers.length})</p>
+              <div className="space-y-2 max-h-56 overflow-y-auto">
+                {teamMembers.map((u) => (
+                  <div key={u.id} className="flex items-center justify-between p-2.5 bg-[#F7F8FA] border border-[#E8E8E8] rounded-lg">
+                    <div className="min-w-0">
+                      <p className="text-sm text-[#111111] font-medium truncate">
+                        {u.name}
+                        {u.id === editingTeam.leadId && <span className="ml-1.5 text-xs text-[#0038BC] font-normal">(Lead)</span>}
+                      </p>
+                      <p className="text-xs text-[#737373]">@{u.username}</p>
+                    </div>
+                    <button
+                      onClick={() => removeMember(u.id)}
+                      disabled={memberBusy === u.id}
+                      className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {memberBusy === u.id
+                        ? <div className="w-3.5 h-3.5 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                        : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                ))}
+                {teamMembers.length === 0 && (
+                  <p className="text-sm text-[#A0A0A0] text-center py-3">No members in this team yet.</p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-sm font-medium text-[#111111] mb-2">Add member</p>
+              <div className="flex gap-2">
+                <select value={addMemberId} onChange={(e) => setAddMemberId(e.target.value)} className={SEL}>
+                  <option value="">Select a user…</option>
+                  {nonMembers.map((u) => (
+                    <option key={u.id} value={u.id}>{u.name} (@{u.username})</option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!addMemberId || memberBusy === addMemberId}
+                  isLoading={memberBusy === addMemberId}
+                  onClick={() => addMember(addMemberId)}
+                >
+                  Add
+                </Button>
+              </div>
+              {nonMembers.length === 0 && (
+                <p className="text-xs text-[#A0A0A0] mt-2">All approved users are already in this team.</p>
+              )}
+            </div>
+          </div>
+        )}
       </SlidePanel>
     </div>
   );

@@ -9,10 +9,10 @@ import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { dbStore } from "./server/db.js";
 import { Role, UserStatus } from "./src/types/index.js";
-import { 
-  uploadToCloudinary, 
-  deleteFromCloudinary, 
-  deliverFormattedNotification 
+import {
+  uploadToCloudinary,
+  deleteFromCloudinary,
+  deliverFormattedNotification
 } from "./server/integrations.js";
 
 // Helper for hashing passwords
@@ -77,8 +77,8 @@ async function startServer() {
     const isAutoApproved = user.status === UserStatus.APPROVED;
 
     res.status(201).json({
-      message: isAutoApproved 
-        ? "Registration completed successfully! Your account is active and you can sign in." 
+      message: isAutoApproved
+        ? "Registration completed successfully! Your account is active and you can sign in."
         : "Registration successful. Please wait for an administrator to approve your account.",
       user: {
         id: user.id,
@@ -195,7 +195,7 @@ async function startServer() {
       await dbStore.updateUserRole(req.params.id, role);
     }
     await dbStore.updateUserTeam(req.params.id, teamId === "none" ? undefined : (teamId || undefined));
-    
+
     const updated = await dbStore.getUserById(req.params.id);
     res.json({ success: true, user: updated });
   });
@@ -354,11 +354,11 @@ async function startServer() {
     const projectUsers = allUsers.filter(u => project.members.includes(u.id));
     const teams = await dbStore.getTeams();
 
-    const filteredUsers = projectUsers.filter(u => 
+    const filteredUsers = projectUsers.filter(u =>
       u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
     );
 
-    const filteredTeams = teams.filter(t => 
+    const filteredTeams = teams.filter(t =>
       t.name.toLowerCase().includes(q)
     );
 
@@ -400,7 +400,7 @@ async function startServer() {
   app.get("/api/tasks", authenticateUser, async (req, res) => {
     const { projectId } = req.query;
     const tasks = await dbStore.getTasks(projectId ? String(projectId) : undefined);
-    
+
     // Enrich tasks with project names
     const enriched = await Promise.all(tasks.map(async t => {
       const proj = await dbStore.getProjectById(t.projectId);
@@ -524,14 +524,14 @@ async function startServer() {
     if (req.body.status === "Done") {
       if (task.dependencies && task.dependencies.length > 0) {
         const projectTasks = await dbStore.getTasks(task.projectId);
-        const incompleteDeps = projectTasks.filter(t => 
-          task.dependencies!.includes(t.id) && 
-          t.status !== "Done" && 
+        const incompleteDeps = projectTasks.filter(t =>
+          task.dependencies!.includes(t.id) &&
+          t.status !== "Done" &&
           !t.deleted
         );
         if (incompleteDeps.length > 0) {
-          res.status(400).json({ 
-            error: `Cannot set to Done. Blocked by unfinished dependencies: ${incompleteDeps.map(t => `"${t.title}"`).join(", ")}` 
+          res.status(400).json({
+            error: `Cannot set to Done. Blocked by unfinished dependencies: ${incompleteDeps.map(t => `"${t.title}"`).join(", ")}`
           });
           return;
         }
@@ -549,7 +549,7 @@ async function startServer() {
         await dbStore.createActivity(updated.projectId, caller.id, caller.name, "task_updated", `Updated task "${updated.title}"`);
       }
     }
-    
+
     // Delivery notifications when task transitions to Completed ("Done")
     if (updated && originalStatus !== "Done" && updated.status === "Done") {
       const project = await dbStore.getProjectById(updated.projectId);
@@ -664,7 +664,7 @@ async function startServer() {
     }
 
     const comment = await dbStore.createComment(taskId, caller.id, content);
-    
+
     // Log comment added on project details activity stream
     const taskObj = await dbStore.getTaskById(taskId);
     if (taskObj) {
@@ -698,6 +698,29 @@ async function startServer() {
 
     const team = await dbStore.createTeam(name, description || "", leadId);
     res.status(201).json(team);
+  });
+
+  app.put("/api/teams/:id", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    if (caller.role !== Role.SUPER_ADMIN && caller.role !== Role.ADMIN && caller.role !== Role.PROJECT_MANAGER) {
+      res.status(403).json({ error: "Access Denied. Only workspace administrators or project managers can edit teams." });
+      return;
+    }
+
+    const team = await dbStore.getTeamById(req.params.id);
+    if (!team) {
+      res.status(404).json({ error: "Team not found." });
+      return;
+    }
+
+    const { name, description, leadId } = req.body;
+    const updated = await dbStore.updateTeam(req.params.id, {
+      ...(name ? { name } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(leadId ? { leadId } : {}),
+    });
+
+    res.json(updated);
   });
 
   app.delete("/api/teams/:id", authenticateUser, async (req, res) => {
@@ -734,7 +757,7 @@ async function startServer() {
 
     try {
       const result = await uploadToCloudinary(base64Data, filename, "projectflow_workspace");
-      res.status(201).json({ 
+      res.status(201).json({
         url: result.url,
         simulated: result.simulated
       });
@@ -915,7 +938,7 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`ProjectFlow full-stack server running on http://localhost:${PORT}`);
-    
+
     // Trigger Trash Cleanup scanner 10 seconds post startup
     setTimeout(() => {
       runTrashAutoCleanup().catch(e => console.error("Initial cleanup pass failed:", e));

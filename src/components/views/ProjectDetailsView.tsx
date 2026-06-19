@@ -9,7 +9,7 @@ import { SlidePanel } from "../ui/SlidePanel.js";
 import { ActivityStream } from "../ActivityStream.js";
 import { KanbanBoard } from "../kanban/KanbanBoard.js";
 import { TipTapEditor } from "../editor/TipTapEditor.js";
-import { ProjectGanttChart } from "../project/ProjectGanttChart.js";
+import { TaskListBoard } from "../tasklist/TaskListBoard.js";
 import { ProjectSprintAnalytics } from "../project/ProjectSprintAnalytics.js";
 import { DateRangePicker } from "../ui/DateRangePicker.js";
 import { User } from "../../types/index.js";
@@ -110,7 +110,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
   const [detailTab, setDetailTab] = useState<"charter" | "activity">("charter");
-  const [viewMode, setViewMode] = useState<"kanban" | "gantt" | "analytics">("kanban");
+  const [viewMode, setViewMode] = useState<"kanban" | "list" | "analytics">("kanban");
 
   // Panel open states
   const [isTaskPanel, setTaskPanel] = useState(false);
@@ -346,7 +346,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
                 <input id="cover-edit-inp" type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCoverToCloudinary(f); }} />
                 {coverUploading ? <p className="text-white/70 text-sm animate-pulse">Uploading…</p> :
                   coverDraft ? <p className="text-green-400 text-sm font-medium">Image ready ✓</p> :
-                  <p className="text-white/60 text-sm">Drop or click to upload</p>}
+                    <p className="text-white/60 text-sm">Drop or click to upload</p>}
               </div>
               <Input
                 value={coverDraft}
@@ -575,10 +575,10 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           </div>
           <div className="flex items-center gap-2">
             <div className="flex bg-[#F4F4F4] p-0.5 rounded-lg text-xs">
-              {(["kanban", "gantt", "analytics"] as const).map((v) => (
+              {(["kanban", "list", "analytics"] as const).map((v) => (
                 <button key={v} onClick={() => setViewMode(v)}
                   className={`px-3 py-1.5 rounded-md capitalize transition-colors ${viewMode === v ? "bg-white text-[#111111] shadow-sm font-medium" : "text-[#737373]"}`}>
-                  {v === "kanban" ? "Board" : v === "gantt" ? "Gantt" : "Analytics"}
+                  {v === "kanban" ? "Board" : v === "list" ? "List" : "Analytics"}
                 </button>
               ))}
             </div>
@@ -595,7 +595,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           ) : (
             <>
               {viewMode === "kanban" && <KanbanBoard tasks={tasks} users={users} onTaskUpdated={() => reloadTasks()} />}
-              {viewMode === "gantt" && <ProjectGanttChart tasks={tasks} users={users} project={project} onTaskUpdated={() => reloadTasks()} />}
+              {viewMode === "list" && <TaskListBoard tasks={tasks} users={users} onTaskUpdated={() => reloadTasks()} />}
               {viewMode === "analytics" && <ProjectSprintAnalytics tasks={tasks} users={users} project={project} />}
             </>
           )}
@@ -619,9 +619,9 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           </div>
           <div className="grid grid-cols-3 gap-3">
             {([
-              ["Status", tStatus, setTStatus, ["To Do","In Progress","Review","Done"]],
-              ["Priority", tPri, setTPri, ["Low","Medium","High","Critical"]],
-              ["Category", tCat, setTCat, ["Development","Design","QA","Management","Billing","Others"]],
+              ["Status", tStatus, setTStatus, ["To Do", "In Progress", "Review", "Done"]],
+              ["Priority", tPri, setTPri, ["Low", "Medium", "High", "Critical"]],
+              ["Category", tCat, setTCat, ["Development", "Design", "QA", "Management", "Billing", "Others"]],
             ] as any[]).map(([lbl, val, set, opts]) => (
               <div key={lbl}>
                 <label className="block text-xs text-[#737373] mb-1">{lbl}</label>
@@ -701,7 +701,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           <div>
             <label className="block text-xs text-[#737373] mb-1">Category</label>
             <select value={fCat} onChange={(e) => setFCat(e.target.value)} className={SEL}>
-              {["Specification","Cover Photo","Mockup / Figma","Billing / Invoice","Client Contract"].map((c) => <option key={c}>{c}</option>)}
+              {["Specification", "Cover Photo", "Mockup / Figma", "Billing / Invoice", "Client Contract"].map((c) => <option key={c}>{c}</option>)}
             </select>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t border-[#E8E8E8]">
@@ -723,7 +723,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
               <div>
                 <label className="block text-xs text-[#737373] mb-1">Role</label>
                 <select value={invRole} onChange={(e) => setInvRole(e.target.value)} className={SEL}>
-                  {["PROJECT_MANAGER","TEAM_LEAD","DEVELOPER","DESIGNER","SENIOR","JUNIOR"].map((r) => <option key={r} value={r}>{r}</option>)}
+                  {["PROJECT_MANAGER", "TEAM_LEAD", "DEVELOPER", "DESIGNER", "SENIOR", "JUNIOR"].map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
               </div>
               <div>
@@ -754,7 +754,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
                   <div className="flex items-center gap-2 flex-wrap">
                     <select value={editRoles[u.id] ?? u.role} onChange={(e) => setEditRoles((p) => ({ ...p, [u.id]: e.target.value }))}
                       className="px-2 py-1 border border-[#D0D0D0] rounded-lg text-xs bg-white focus:outline-none">
-                      {["PROJECT_MANAGER","TEAM_LEAD","DEVELOPER","DESIGNER","SENIOR","JUNIOR"].map((r) => <option key={r}>{r}</option>)}
+                      {["PROJECT_MANAGER", "TEAM_LEAD", "DEVELOPER", "DESIGNER", "SENIOR", "JUNIOR"].map((r) => <option key={r}>{r}</option>)}
                     </select>
                     <select value={editTeams[u.id] ?? (u.teamId ?? "none")} onChange={(e) => setEditTeams((p) => ({ ...p, [u.id]: e.target.value }))}
                       className="px-2 py-1 border border-[#D0D0D0] rounded-lg text-xs bg-white focus:outline-none">

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useProjects } from "../../hooks/useProjects.js";
 import { useUIStore } from "../../store/ui-store.js";
 import { usePageTitle } from "../../hooks/usePageTitle.js";
@@ -11,21 +11,99 @@ import { Button } from "../ui/Button.js";
 import { Input } from "../ui/Input.js";
 import { SlidePanel } from "../ui/SlidePanel.js";
 import { TipTapEditor } from "../editor/TipTapEditor.js";
-import { Project, User, UserStatus } from "../../types/index.js";
-import { FolderKanban, Plus, Calendar, Users, ChevronRight, AlertCircle, Paperclip } from "lucide-react";
+import { Project, User, UserStatus, Task } from "../../types/index.js";
+import {
+  FolderKanban, Plus, Calendar, AlertCircle, Search, X,
+  ArrowUpRight, CheckCircle2, ImageIcon, Check,
+} from "lucide-react";
 
-const PRIORITY_STYLES: Record<string, string> = {
-  Low: "bg-[#F4F4F4] text-[#737373]",
-  Medium: "bg-[#fef3dc] text-[#9a5b00]",
-  High: "bg-orange-50 text-orange-700",
-  Critical: "bg-red-50 text-red-700",
+const FALLBACK_COVER =
+  "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?auto=format&fit=crop&q=80&w=600";
+
+const STATUS_META: Record<Project["status"], { dot: string; glass: string; ring: string }> = {
+  Planning: { dot: "bg-[#A0A0A0]", glass: "bg-white/15 border-white/25", ring: "#A0A0A0" },
+  "In Progress": { dot: "bg-[#5B8DEF]", glass: "bg-[#0038BC]/30 border-[#5B8DEF]/40", ring: "#0038BC" },
+  Review: { dot: "bg-[#FFCF85]", glass: "bg-[#EF8F00]/30 border-[#FFCF85]/40", ring: "#EF8F00" },
+  Completed: { dot: "bg-emerald-400", glass: "bg-emerald-500/30 border-emerald-300/40", ring: "#16a34a" },
 };
-const STATUS_STYLES: Record<string, string> = {
-  Planning: "bg-[#F4F4F4] text-[#737373]",
-  "In Progress": "bg-[#e8edfb] text-[#0038BC]",
-  Review: "bg-[#fef3dc] text-[#9a5b00]",
-  Completed: "bg-green-50 text-green-700",
+
+const PRIORITY_META: Record<Project["priority"], { glass: string }> = {
+  Low: { glass: "bg-white/10 border-white/20" },
+  Medium: { glass: "bg-[#EF8F00]/25 border-[#FFCF85]/35" },
+  High: { glass: "bg-orange-500/30 border-orange-300/40" },
+  Critical: { glass: "bg-red-500/35 border-red-300/45" },
 };
+
+const STATUS_FILTERS = ["All", "Planning", "In Progress", "Review", "Completed"] as const;
+
+// ─── Small stat pill for the header ──────────────────────────────────────────
+function StatPill({ label, value, accent = false }: { label: string; value: string | number; accent?: boolean }) {
+  return (
+    <div
+      className={`flex items-center gap-2.5 rounded-2xl border px-4 py-2.5 transition-colors ${accent ? "border-[#0038BC]/15 bg-[#e8edfb]" : "border-[#E8E8E8] bg-white"
+        }`}
+    >
+      <span className={`font-mono text-base font-semibold ${accent ? "text-[#0038BC]" : "text-[#111111]"}`}>
+        {value}
+      </span>
+      <span className="text-[11px] uppercase tracking-wide text-[#A0A0A0]">{label}</span>
+    </div>
+  );
+}
+
+// ─── Animated radial progress, used on each card ─────────────────────────────
+function ProgressRing({ value, color, size = 34 }: { value: number; color: string; size?: number }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  const stroke = 3.5;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c - ((mounted ? value : 0) / 100) * c;
+
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#EEEEEE" strokeWidth={stroke} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={offset}
+          className="transition-[stroke-dashoffset] duration-700 ease-out motion-reduce:transition-none"
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center font-mono text-[10px] font-semibold text-[#111111]">
+        {value}
+      </span>
+    </div>
+  );
+}
+
+// ─── Animated linear "flow" bar under the cover image ────────────────────────
+function FlowBar({ pct, active }: { pct: number; active: boolean }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  return (
+    <div className="h-[3px] w-full bg-[#F0F1F5]">
+      <div
+        className={`h-full bg-gradient-to-r from-[#0038BC] to-[#5B8DEF] transition-[width] duration-700 ease-out motion-reduce:transition-none ${active ? "motion-safe:animate-pulse" : ""
+          }`}
+        style={{ width: mounted ? `${pct}%` : "0%" }}
+      />
+    </div>
+  );
+}
 
 export function ProjectsView() {
   usePageTitle("Projects", "Manage all your projects, deadlines, and teams in ProjectFlow.");
@@ -37,6 +115,11 @@ export function ProjectsView() {
 
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [usersList, setUsersList] = useState<User[]>([]);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
+
+  // Search & filter — purely client-side, no backend changes required
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<typeof STATUS_FILTERS[number]>("All");
 
   const [projName, setProjName] = useState("");
   const [coverUrl, setCoverUrl] = useState("");
@@ -53,11 +136,55 @@ export function ProjectsView() {
 
   useEffect(() => {
     if (!token) return;
-    fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((list) => setUsersList(list.filter((u: User) => u.status === UserStatus.APPROVED)))
+    Promise.all([
+      fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
+      fetch("/api/tasks", { headers: { Authorization: `Bearer ${token}` } }),
+    ])
+      .then(async ([uRes, tRes]) => [
+        uRes.ok ? await uRes.json() : [],
+        tRes.ok ? await tRes.json() : [],
+      ])
+      .then(([userData, taskData]) => {
+        setUsersList(userData.filter((u: User) => u.status === UserStatus.APPROVED));
+        setAllTasks(taskData);
+      })
       .catch(() => { });
   }, [token]);
+
+  // Real completion stats per project, derived from tasks already in hand
+  const projectStats = useMemo(() => {
+    const map: Record<string, { total: number; done: number; pct: number }> = {};
+    for (const p of projects) {
+      const ts = allTasks.filter((t) => t.projectId === p.id && !t.deleted);
+      const done = ts.filter((t) => t.status === "Done").length;
+      map[p.id] = { total: ts.length, done, pct: ts.length ? Math.round((done / ts.length) * 100) : 0 };
+    }
+    return map;
+  }, [projects, allTasks]);
+
+  const statusCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const p of projects) c[p.status] = (c[p.status] ?? 0) + 1;
+    return c;
+  }, [projects]);
+
+  const filteredProjects = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return projects.filter((p) => {
+      if (statusFilter !== "All" && p.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.richTextDescription.replace(/<[^>]*>/g, "").toLowerCase().includes(q)
+      );
+    });
+  }, [projects, query, statusFilter]);
+
+  const activeCount = projects.filter((p) => p.status === "In Progress").length;
+  const trackedProjects = projects.filter((p) => (projectStats[p.id]?.total ?? 0) > 0);
+  const avgCompletion = trackedProjects.length
+    ? Math.round(trackedProjects.reduce((s, p) => s + projectStats[p.id].pct, 0) / trackedProjects.length)
+    : 0;
 
   const toggleMember = (id: string) =>
     setSelectedMembers((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
@@ -104,7 +231,7 @@ export function ProjectsView() {
     try {
       await createProject({
         name: projName,
-        coverImageUrl: coverUrl || "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?auto=format&fit=crop&q=80&w=600",
+        coverImageUrl: coverUrl || FALLBACK_COVER,
         richTextDescription: desc,
         startDate, endDate, priority, status,
         members: selectedMembers.length ? selectedMembers : user ? [user.id] : [],
@@ -119,11 +246,19 @@ export function ProjectsView() {
     }
   };
 
-  const SEL = "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0038BC]/20 focus:border-[#0038BC]";
+  const SEL =
+    "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-xl text-sm focus:outline-none focus:ring-4 focus:ring-[#0038BC]/10 focus:border-[#0038BC] transition-shadow";
+
+  const hasActiveFilters = query.trim() !== "" || statusFilter !== "All";
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-7">
+      <style>{`
+        @keyframes pf-fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+        @keyframes pf-shimmer { from { transform: translateX(-150%); } to { transform: translateX(150%); } }
+      `}</style>
+
+      {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white rounded-xl border border-[#E8E8E8] px-5 py-4">
         <div>
           <h2 className="text-base font-semibold text-[#111111]">Projects</h2>
@@ -135,88 +270,259 @@ export function ProjectsView() {
         </Button>
       </div>
 
-      {isLoading ? (
-        <div className="flex justify-center py-24">
-          <div className="w-8 h-8 border-2 border-[#0038BC] border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : error ? (
-        <div className="flex items-center gap-2.5 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
-          <AlertCircle className="w-4 h-4 shrink-0" />{error}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-          {projects.map((proj) => (
-            <button
-              key={proj.id}
-              onClick={() => navigate(`projects/${proj.id}`)}
-              className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden hover:border-[#0038BC]/30 hover:shadow-md transition-all text-left group"
-            >
-              <div className="h-32 relative overflow-hidden bg-[#EEEEEE]">
-                <img
-                  src={proj.coverImageUrl || "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?auto=format&fit=crop&q=80&w=600"}
-                  alt=""
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
-                <div className="absolute bottom-3 left-4 right-4 flex items-end justify-between">
-                  <h3 className="text-sm font-semibold text-white truncate pr-2">{proj.name}</h3>
-                  <span className={`text-xs px-2 py-0.5 rounded-md font-medium shrink-0 ${STATUS_STYLES[proj.status] || "bg-[#F4F4F4] text-[#737373]"}`}>
-                    {proj.status}
-                  </span>
-                </div>
-              </div>
-
-              <div className="p-4">
-                <p className="text-sm text-[#737373] line-clamp-2 mb-3">
-                  {proj.richTextDescription.replace(/<[^>]*>/g, "") || "No description."}
-                </p>
-                <div className="flex items-center justify-between text-xs text-[#A0A0A0]">
-                  <span className="flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5" />
-                    {proj.startDate} – {proj.endDate}
-                  </span>
-                  <span className={`px-2 py-0.5 rounded-md ${PRIORITY_STYLES[proj.priority] || "bg-[#F4F4F4] text-[#737373]"}`}>
-                    {proj.priority}
-                  </span>
-                </div>
-              </div>
-
-              <div className="px-4 py-3 bg-[#F7F8FA] border-t border-[#E8E8E8] flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-xs text-[#737373]">
-                  <Users className="w-3.5 h-3.5" />{proj.members?.length || 0} members
-                </span>
-                <span className="flex items-center gap-0.5 text-xs text-[#0038BC] font-medium group-hover:gap-1.5 transition-all">
-                  Open <ChevronRight className="w-3.5 h-3.5" />
-                </span>
-              </div>
-            </button>
-          ))}
-
-          {projects.length === 0 && (
-            <div className="col-span-full flex flex-col items-center justify-center py-24 border-2 border-dashed border-[#E8E8E8] rounded-xl">
-              <FolderKanban className="w-10 h-10 text-[#D0D0D0] mb-3" />
-              <p className="font-medium text-[#525252]">No projects yet</p>
-              <p className="text-sm text-[#A0A0A0] mt-1">Create your first project to get started.</p>
-              <Button onClick={() => setIsPanelOpen(true)} variant="primary" className="mt-4">
-                <Plus className="w-4 h-4" /> New project
-              </Button>
+      {/* ── Content section: toolbar + project list, one cohesive card ─── */}
+      <div className="rounded-xl border border-[#E8E8E8] bg-white p-5 space-y-5">
+        {/* Toolbar: search + filters */}
+        <div className="flex flex-col gap-3 border-b border-[#F4F4F4] pb-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-1 flex-col gap-2.5 justify-between sm:flex-row sm:items-center">
+            <div className="relative max-w-sm flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#A0A0A0]" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search projects…"
+                aria-label="Search projects"
+                className="w-full rounded-xl border border-[#E8E8E8] bg-white py-2.5 pl-9 pr-9 text-sm text-[#111111] placeholder:text-[#A0A0A0] transition-shadow focus:outline-none focus:ring-4 focus:ring-[#0038BC]/10 focus:border-[#0038BC]"
+              />
+              {query && (
+                <button
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-[#A0A0A0] transition-colors hover:bg-[#F4F4F4] hover:text-[#111111]"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
-          )}
-        </div>
-      )}
 
-      {/* New project slide panel */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 sm:pb-0">
+              {STATUS_FILTERS.map((s) => {
+                const active = statusFilter === s;
+                const count = s === "All" ? projects.length : statusCounts[s] ?? 0;
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setStatusFilter(s)}
+                    aria-pressed={active}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150 ${active
+                      ? "bg-[#0038BC] text-white shadow-sm shadow-[#0038BC]/30 border border-transparent"
+                      : "border border-[#E8E8E8] bg-white text-[#525252] hover:border-[#0038BC]/30 hover:text-[#0038BC]"
+                      }`}
+                  >
+                    {s}
+                    <span className={`font-mono text-[10px] ${active ? "text-white/70" : "text-[#A0A0A0]"}`}>{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {hasActiveFilters && (
+          <p className="text-xs text-[#737373]">
+            {filteredProjects.length} match{filteredProjects.length !== 1 ? "es" : ""} found ·{" "}
+            <button
+              onClick={() => { setQuery(""); setStatusFilter("All"); }}
+              className="font-medium text-[#0038BC] hover:underline"
+            >
+              Clear filters
+            </button>
+          </p>
+        )}
+
+        {/* Body */}
+        {isLoading ? (
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="overflow-hidden rounded-2xl border border-[#E8E8E8] bg-white">
+                <div className="relative h-36 overflow-hidden bg-[#F0F1F5]">
+                  <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/70 to-transparent motion-safe:animate-[pf-shimmer_1.6s_ease-in-out_infinite]" />
+                </div>
+                <div className="space-y-3 p-5">
+                  <div className="h-3 w-24 rounded-full bg-[#F0F1F5]" />
+                  <div className="h-4 w-3/4 rounded-full bg-[#F0F1F5]" />
+                  <div className="h-3 w-full rounded-full bg-[#F0F1F5]" />
+                  <div className="h-3 w-5/6 rounded-full bg-[#F0F1F5]" />
+                  <div className="flex items-center justify-between pt-3">
+                    <div className="h-8 w-8 rounded-full bg-[#F0F1F5]" />
+                    <div className="h-8 w-16 rounded-full bg-[#F0F1F5]" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : error ? (
+          <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">
+            <span className="rounded-full bg-red-100 p-2"><AlertCircle className="h-4 w-4" /></span>
+            <div>
+              <p className="font-medium">Couldn't load projects</p>
+              <p className="mt-0.5 text-red-600/90">{error}</p>
+            </div>
+          </div>
+        ) : projects.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[#E8E8E8] py-24 text-center opacity-100 motion-safe:opacity-0 motion-safe:animate-[pf-fadeUp_0.5s_ease_forwards]">
+            <div className="relative mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#e8edfb] to-[#dbe6fb]">
+              <FolderKanban className="h-7 w-7 text-[#0038BC]" />
+              <span className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EF8F00] text-white shadow-md">
+                <Plus className="h-3.5 w-3.5" />
+              </span>
+            </div>
+            <p className="text-base font-semibold text-[#111111]">Your workspace is empty</p>
+            <p className="mt-1.5 max-w-sm text-sm text-[#A0A0A0]">
+              Spin up your first project to start tracking tasks, deadlines, and how your team is moving.
+            </p>
+            <Button onClick={() => setIsPanelOpen(true)} variant="primary" className="mt-5">
+              <Plus className="h-4 w-4" /> New project
+            </Button>
+          </div>
+        ) : filteredProjects.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[#E8E8E8] py-20 text-center">
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F4F4F4]">
+              <Search className="h-5 w-5 text-[#A0A0A0]" />
+            </div>
+            <p className="font-medium text-[#525252]">No projects match your search</p>
+            <p className="mt-1 text-sm text-[#A0A0A0]">Try a different keyword or clear your filters.</p>
+            <button
+              onClick={() => { setQuery(""); setStatusFilter("All"); }}
+              className="mt-4 text-sm font-medium text-[#0038BC] hover:underline"
+            >
+              Clear filters
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+            {filteredProjects.map((proj, idx) => {
+              const stats = projectStats[proj.id] ?? { total: 0, done: 0, pct: 0 };
+              const sMeta =
+                STATUS_META[proj.status as keyof typeof STATUS_META] ??
+                STATUS_META["Planning"];
+
+              const pMeta =
+                PRIORITY_META[proj.priority as keyof typeof PRIORITY_META] ??
+                PRIORITY_META["Medium"];
+
+              if (!STATUS_META[proj.status as keyof typeof STATUS_META]) {
+                console.warn("Invalid status:", proj.status, proj);
+              }
+
+              if (!PRIORITY_META[proj.priority as keyof typeof PRIORITY_META]) {
+                console.warn("Invalid priority:", proj.priority, proj);
+              }
+
+              const overdue = proj.status !== "Completed" && new Date(proj.endDate) < new Date();
+              const ringValue = stats.total ? stats.pct : proj.status === "Completed" ? 100 : 0;
+              const barValue = stats.total ? stats.pct : proj.status === "Completed" ? 100 : 6;
+
+              return (
+                <button
+                  key={proj.id}
+                  onClick={() => navigate(`projects/${proj.id}`)}
+                  style={{ animationDelay: `${Math.min(idx * 45, 360)}ms` }}
+                  className="group relative flex flex-col overflow-hidden rounded-2xl border border-[#E8E8E8] bg-white text-left opacity-100 transition-all duration-300 cursor-pointer hover:border-[#0038BC]/25 hover:shadow-[0_18px_40px_-12px_rgba(0,56,188,0.18)] motion-safe:opacity-0 motion-safe:animate-[pf-fadeUp_0.55s_ease_forwards]"
+                >
+                  {/* Media */}
+                  <div className="relative h-36 overflow-hidden bg-[#111111]">
+                    <img
+                      src={proj.coverImageUrl || FALLBACK_COVER}
+                      alt=""
+                      className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.07]"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/5 to-transparent" />
+
+                    <div className="absolute inset-x-3 top-3 flex items-center justify-between">
+                      <span
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-md ${sMeta.glass}`}
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${sMeta.dot} ${proj.status === "In Progress" ? "motion-safe:animate-pulse" : ""
+                            }`}
+                        />
+                        {proj.status}
+                      </span>
+                      <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-md ${pMeta.glass}`}>
+                        {proj.priority}
+                      </span>
+                    </div>
+
+                    <span className="absolute bottom-3 right-3 flex h-8 w-8 translate-y-2 items-center justify-center rounded-full bg-white/90 text-[#0038BC] opacity-0 shadow-lg backdrop-blur transition-all duration-300 group-hover:translate-y-0 group-hover:opacity-100">
+                      <ArrowUpRight className="h-4 w-4" />
+                    </span>
+                  </div>
+
+                  <FlowBar pct={barValue} active={proj.status === "In Progress"} />
+
+                  {/* Body */}
+                  <div className="flex flex-1 flex-col gap-3 p-5">
+                    <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#A0A0A0]">
+                      <Calendar className="h-3 w-3" />
+                      {proj.startDate} → {proj.endDate}
+                      {overdue && (
+                        <span className="ml-1.5 inline-flex items-center rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">
+                          Past due
+                        </span>
+                      )}
+                    </div>
+
+                    <h3 className="line-clamp-1 text-[15px] font-semibold text-[#111111] transition-colors group-hover:text-[#0038BC]">
+                      {proj.name}
+                    </h3>
+
+                    <p className="line-clamp-2 text-sm leading-relaxed text-[#737373]">
+                      {proj.richTextDescription.replace(/<[^>]*>/g, "") || "No description yet."}
+                    </p>
+
+                    <div className="mt-auto flex items-center justify-between border-t border-[#F4F4F4] pt-3.5">
+                      <div className="flex items-center -space-x-2">
+                        {(proj.members ?? []).slice(0, 4).map((mid) => {
+                          const m = usersList.find((u) => u.id === mid);
+                          return (
+                            <div
+                              key={mid}
+                              title={m?.name ?? "Member"}
+                              className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#e8edfb] text-[10px] font-semibold text-[#0038BC]"
+                            >
+                              {m ? m.name.charAt(0).toUpperCase() : "?"}
+                            </div>
+                          );
+                        })}
+                        {(proj.members?.length ?? 0) > 4 && (
+                          <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#F4F4F4] text-[10px] font-semibold text-[#737373]">
+                            +{proj.members!.length - 4}
+                          </div>
+                        )}
+                        {(proj.members?.length ?? 0) === 0 && (
+                          <span className="text-xs text-[#A0A0A0]">Unassigned</span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {stats.total > 0 && (
+                          <span className="font-mono text-[11px] text-[#A0A0A0]">{stats.done}/{stats.total}</span>
+                        )}
+                        <ProgressRing value={ringValue} color={sMeta.ring} />
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── New project slide panel ───────────────────────────────────── */}
       <SlidePanel
         isOpen={isPanelOpen}
         onClose={() => { setIsPanelOpen(false); resetForm(); }}
         title="New project"
-        description="Fill in the details to create a new project."
+        description="Set the basics — you can fill in the rest later."
         size="lg"
       >
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-5">
           {formError && (
-            <div className="flex items-start gap-2.5 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />{formError}
+            <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />{formError}
             </div>
           )}
 
@@ -224,25 +530,36 @@ export function ProjectsView() {
 
           {/* Cover image */}
           <div>
-            <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Cover image</label>
+            <label className="mb-1.5 block text-sm font-medium text-[#3D3D3D]">Cover image</label>
             <div
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCover(f); }}
               onClick={() => document.getElementById("cover-upload-proj")?.click()}
-              className="border-2 border-dashed border-[#D0D0D0] rounded-lg h-24 flex flex-col items-center justify-center cursor-pointer hover:border-[#0038BC] transition-colors"
+              className="group relative flex h-28 cursor-pointer items-center justify-center gap-3 overflow-hidden rounded-xl border-2 border-dashed border-[#D0D0D0] transition-colors hover:border-[#0038BC]"
             >
               <input id="cover-upload-proj" type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCover(f); }} />
-              <Paperclip className="w-5 h-5 text-[#A0A0A0] mb-1" />
-              {isUploading ? (
-                <span className="text-xs text-[#737373] animate-pulse">Uploading…</span>
-              ) : coverUrl ? (
-                <span className="text-xs text-green-600 font-medium">Image uploaded ✓</span>
+              {coverUrl ? (
+                <>
+                  <img src={coverUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-90" />
+                  <div className="absolute inset-0 bg-black/35" />
+                  <span className="relative z-10 flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1.5 text-xs font-medium text-green-700">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Cover set — click to replace
+                  </span>
+                </>
+              ) : isUploading ? (
+                <span className="flex items-center gap-2 text-xs text-[#737373]">
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#0038BC] border-t-transparent" />
+                  Uploading…
+                </span>
               ) : (
-                <span className="text-xs text-[#737373]">Drop or click to upload cover</span>
+                <div className="flex flex-col items-center text-[#A0A0A0] transition-colors group-hover:text-[#0038BC]">
+                  <ImageIcon className="mb-1 h-5 w-5" />
+                  <span className="text-xs">Drop an image, or click to browse</span>
+                </div>
               )}
             </div>
-            {cloudinaryError && <p className="text-xs text-[#EF8F00] mt-1">{cloudinaryError}</p>}
-            <Input label="Or paste cover URL" placeholder="https://…" value={coverUrl} onChange={(e) => setCoverUrl(e.target.value)} className="mt-2" />
+            {cloudinaryError && <p className="mt-1 text-xs text-[#EF8F00]">{cloudinaryError}</p>}
+            <Input label="Or paste a cover URL" placeholder="https://…" value={coverUrl} onChange={(e) => setCoverUrl(e.target.value)} className="mt-2" />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -252,13 +569,13 @@ export function ProjectsView() {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Status</label>
+              <label className="mb-1.5 block text-sm font-medium text-[#3D3D3D]">Status</label>
               <select value={status} onChange={(e) => setStatus(e.target.value)} className={SEL}>
                 {["Planning", "In Progress", "Review", "Completed"].map((s) => <option key={s}>{s}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Priority</label>
+              <label className="mb-1.5 block text-sm font-medium text-[#3D3D3D]">Priority</label>
               <select value={priority} onChange={(e) => setPriority(e.target.value)} className={SEL}>
                 {["Low", "Medium", "High", "Critical"].map((p) => <option key={p}>{p}</option>)}
               </select>
@@ -266,33 +583,52 @@ export function ProjectsView() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Description</label>
+            <label className="mb-1.5 block text-sm font-medium text-[#3D3D3D]">Description</label>
             <TipTapEditor value={desc} onChange={setDesc} placeholder="Describe the project goals and scope…" />
           </div>
 
           {/* Team members */}
           <div>
-            <label className="block text-sm font-medium text-[#3D3D3D] mb-2">Team members</label>
-            <div className="max-h-40 overflow-y-auto border border-[#E8E8E8] rounded-lg bg-[#F7F8FA] p-2 grid grid-cols-1 gap-1.5">
+            <div className="mb-2 flex items-center justify-between">
+              <label className="block text-sm font-medium text-[#3D3D3D]">Team members</label>
+              {selectedMembers.length > 0 && (
+                <span className="font-mono text-xs text-[#A0A0A0]">{selectedMembers.length} selected</span>
+              )}
+            </div>
+            <div className="grid max-h-40 grid-cols-1 gap-1.5 overflow-y-auto rounded-xl border border-[#E8E8E8] bg-[#F7F8FA] p-2">
               {usersList.map((u) => {
                 const sel = selectedMembers.includes(u.id);
                 return (
-                  <button key={u.id} type="button" onClick={() => toggleMember(u.id)}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition-colors ${sel ? "bg-[#e8edfb] text-[#0038BC] border border-[#0038BC]/20" : "bg-white border border-[#E8E8E8] text-[#3D3D3D] hover:bg-[#F4F4F4]"}`}>
-                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${sel ? "bg-[#0038BC] border-[#0038BC]" : "border-[#D0D0D0]"}`}>
-                      {sel && <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
-                    </div>
-                    <div className="min-w-0">
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => toggleMember(u.id)}
+                    className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${sel
+                      ? "bg-[#e8edfb] text-[#0038BC] ring-1 ring-inset ring-[#0038BC]/25"
+                      : "border border-[#E8E8E8] bg-white text-[#3D3D3D] hover:bg-[#F4F4F4]"
+                      }`}
+                  >
+                    <span
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${sel ? "bg-[#0038BC] text-white" : "bg-[#EEEEEE] text-[#737373]"
+                        }`}
+                    >
+                      {u.name.charAt(0).toUpperCase()}
+                    </span>
+                    <span className="min-w-0 flex-1">
                       <span className="block truncate font-medium">{u.name}</span>
                       <span className="text-xs text-[#737373]">{u.role}</span>
-                    </div>
+                    </span>
+                    {sel && <Check className="h-3.5 w-3.5 shrink-0 text-[#0038BC]" />}
                   </button>
                 );
               })}
+              {usersList.length === 0 && (
+                <p className="px-2 py-3 text-center text-xs text-[#A0A0A0]">No approved members yet.</p>
+              )}
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-2 border-t border-[#E8E8E8]">
+          <div className="flex justify-end gap-3 border-t border-[#E8E8E8] pt-4">
             <Button type="button" variant="outline" onClick={() => { setIsPanelOpen(false); resetForm(); }}>Cancel</Button>
             <Button type="submit" variant="primary" isLoading={isSubmitting}>Create project</Button>
           </div>
