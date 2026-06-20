@@ -6,6 +6,9 @@
 import express from "express";
 import path from "path";
 import crypto from "crypto";
+import bcrypt from "bcrypt";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
 import { createServer as createViteServer } from "vite";
 import { dbStore } from "./server/db.js";
 import { Role, UserStatus } from "./src/types/index.js";
@@ -15,26 +18,122 @@ import {
   deliverFormattedNotification
 } from "./server/integrations.js";
 
-// Helper for hashing passwords
-function hashPassword(password: string): string {
-  return crypto.createHash("sha256").update(password).digest("hex");
+const BCRYPT_ROUNDS = 12;
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const CLOUDINARY_FOLDER = "projectflow_workspace";
+
+// One-time bootstrap guard: the very first SUPER_ADMIN account must be created
+// with this token present, so an empty users collection can never be silently
+// claimed by whoever happens to register first in production.
+const SETUP_TOKEN = process.env.SETUP_TOKEN;
+
+// CORS allowlist — comma-separated origins in env, falls back to APP_URL.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.APP_URL || "http://localhost:3000")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// ─── Password hashing ──────────────────────────────────────────────────────
+async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, BCRYPT_ROUNDS);
+}
+
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  // Backward-compat: detect legacy unsalted-SHA256 hashes (64 hex chars,
+  // no bcrypt "$2" prefix) so existing users aren't locked out. On a
+  // successful legacy match we transparently upgrade them to bcrypt.
+  const isLegacySha256 = /^[a-f0-9]{64}$/i.test(stored);
+  if (isLegacySha256) {
+    const legacyHash = crypto.createHash("sha256").update(password).digest("hex");
+    return legacyHash === stored;
+  }
+  return bcrypt.compare(password, stored);
+}
+
+// ─── Session tokens ────────────────────────────────────────────────────────
+// Sessions are opaque, cryptographically random tokens mapped server-side to
+// a userId + expiry. The token itself is NEVER the user's database id, so it
+// can't be guessed/enumerated, and it expires.
+function generateSessionToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+async function createSessionForUser(userId: string): Promise<string> {
+  const token = generateSessionToken();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+  await dbStore.createSession(token, userId, expiresAt);
+  return token;
+}
+
+function isAdminRole(role: Role): boolean {
+  return role === Role.SUPER_ADMIN || role === Role.ADMIN;
+}
+
+function isManagerRole(role: Role): boolean {
+  return role === Role.SUPER_ADMIN || role === Role.ADMIN || role === Role.PROJECT_MANAGER;
+}
+
+// CSV field escaping — wraps in quotes and doubles internal quotes; also
+// neutralizes leading =,+,-,@ to defeat formula/CSV injection in Excel/Sheets.
+function csvField(value: string): string {
+  let v = String(value ?? "");
+  if (/^[=+\-@]/.test(v)) v = "'" + v;
+  return `"${v.replace(/"/g, '""')}"`;
 }
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(express.json({ limit: "50mb" }));
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        // Allow same-origin/non-browser requests (no Origin header) through.
+        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
+        }
+      },
+      credentials: true,
+    })
+  );
 
-  // Middleware to authenticate user from headers
+  app.use(express.json({ limit: "15mb" }));
+
+  // Generic API rate limiter — protects every endpoint from basic abuse.
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 600,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use("/api", apiLimiter);
+
+  // Tighter limiter specifically for auth endpoints (brute-force protection).
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many attempts. Please try again later." },
+  });
+
+  // Middleware to authenticate user from a session token (NOT a raw user id).
   const authenticateUser = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       res.status(401).json({ error: "Unauthorized. Missing token." });
       return;
     }
-    const userId = authHeader.split(" ")[1];
-    const user = await dbStore.getUserById(userId);
+    const token = authHeader.split(" ")[1];
+    const session = await dbStore.getSession(token);
+    if (!session || new Date(session.expiresAt) < new Date()) {
+      if (session) await dbStore.deleteSession(token);
+      res.status(401).json({ error: "Session expired or invalid. Please sign in again." });
+      return;
+    }
+    const user = await dbStore.getUserById(session.userId);
     if (!user) {
       res.status(401).json({ error: "Session expired or user not found." });
       return;
@@ -44,16 +143,29 @@ async function startServer() {
       return;
     }
     (req as any).user = user;
+    (req as any).sessionToken = token;
     next();
+  };
+
+  // Helper: does the caller own/belong to/administer this project?
+  const canManageProject = (caller: any, project: any): boolean => {
+    if (isManagerRole(caller.role)) return true;
+    if (project.ownerId === caller.id) return true;
+    if (Array.isArray(project.members) && project.members.includes(caller.id)) return true;
+    return false;
   };
 
   // --- API ROUTES FIRST ---
 
   // User Management Authentication
-  app.post("/api/auth/register", async (req, res) => {
-    const { name, username, email, password, isInvitation, role, teamId } = req.body;
+  app.post("/api/auth/register", authLimiter, async (req, res) => {
+    const { name, username, email, password, isInvitation, inviteToken, role, teamId } = req.body;
     if (!name || !username || !email || !password) {
       res.status(400).json({ error: "All fields are required." });
+      return;
+    }
+    if (typeof password !== "string" || password.length < 8) {
+      res.status(400).json({ error: "Password must be at least 8 characters." });
       return;
     }
 
@@ -63,16 +175,55 @@ async function startServer() {
       return;
     }
 
-    const passwordHash = hashPassword(password);
+    // Resolve invitation, if one was supplied — this is the authoritative
+    // source of role/team/auto-approval, NOT the isInvitation/role/teamId
+    // fields a client could otherwise set unchecked.
+    let resolvedRole: Role | undefined;
+    let resolvedTeamId: string | undefined;
+    let resolvedAutoApprove = false;
+    let invite: any = null;
+
+    if (inviteToken) {
+      invite = await dbStore.getInvitationById(inviteToken);
+      if (!invite || invite.status !== "active") {
+        res.status(400).json({ error: "Invitation is invalid, expired, or already used up." });
+        return;
+      }
+      resolvedRole = invite.role;
+      resolvedTeamId = invite.teamId;
+      resolvedAutoApprove = true;
+    }
+
+    // Bootstrap-only path: no users exist yet AND a valid SETUP_TOKEN was
+    // supplied. This replaces the old implicit "first user = SUPER_ADMIN".
+    const existingUsersCount = (await dbStore.getUsers()).length;
+    let bootstrapSuperAdmin = false;
+    if (existingUsersCount === 0) {
+      if (!SETUP_TOKEN || req.body.setupToken !== SETUP_TOKEN) {
+        res.status(403).json({
+          error: "Initial workspace setup requires a valid setup token. Contact your administrator.",
+        });
+        return;
+      }
+      bootstrapSuperAdmin = true;
+    }
+
+    const passwordHash = await hashPassword(password);
     const user = await dbStore.createUser({
       name,
       username,
       email,
       passwordHash,
-      role: isInvitation ? (role || Role.JUNIOR) : Role.JUNIOR,
-      status: isInvitation ? UserStatus.APPROVED : UserStatus.PENDING,
-      teamId: isInvitation ? (teamId || undefined) : undefined
+      role: bootstrapSuperAdmin
+        ? Role.SUPER_ADMIN
+        : resolvedRole ?? (isInvitation ? (role || Role.JUNIOR) : Role.JUNIOR),
+      status: bootstrapSuperAdmin || resolvedAutoApprove ? UserStatus.APPROVED : UserStatus.PENDING,
+      teamId: resolvedTeamId ?? (isInvitation ? (teamId || undefined) : undefined),
     });
+
+    if (invite) {
+      await dbStore.useInvitation(invite.id);
+    }
 
     const isAutoApproved = user.status === UserStatus.APPROVED;
 
@@ -91,7 +242,7 @@ async function startServer() {
     });
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", authLimiter, async (req, res) => {
     const { usernameOrEmail, password } = req.body;
     if (!usernameOrEmail || !password) {
       res.status(400).json({ error: "Username/Email and Password are required." });
@@ -99,13 +250,12 @@ async function startServer() {
     }
 
     const user = await dbStore.getUserByUsernameOrEmail(usernameOrEmail);
-    if (!user) {
-      res.status(400).json({ error: "Invalid username, email, or password." });
-      return;
-    }
+    // Always run a hash comparison even on a missing user, to avoid leaking
+    // via response-time whether an account exists (basic timing-attack hygiene).
+    const compareTarget = (user as any)?.passwordHash ?? "$2b$12$invalidinvalidinvalidinvalidinvalidinv";
+    const passwordOk = await verifyPassword(password, compareTarget);
 
-    const hash = hashPassword(password);
-    if ((user as any).passwordHash !== hash) {
+    if (!user || !passwordOk) {
       res.status(400).json({ error: "Invalid username, email, or password." });
       return;
     }
@@ -115,11 +265,28 @@ async function startServer() {
       return;
     }
 
+    // Transparent upgrade: if this user still has a legacy SHA-256 hash,
+    // re-hash with bcrypt now that we know the plaintext password is correct.
+    if (/^[a-f0-9]{64}$/i.test((user as any).passwordHash)) {
+      const upgraded = await hashPassword(password);
+      await dbStore.updateUserPasswordHash?.(user.id, upgraded);
+    }
+
+    const token = await createSessionForUser(user.id);
+
     res.json({
       message: "Login successful.",
-      token: user.id,
+      token,
       user
     });
+  });
+
+  app.post("/api/auth/logout", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      await dbStore.deleteSession(authHeader.split(" ")[1]);
+    }
+    res.json({ success: true });
   });
 
   app.get("/api/auth/session", authenticateUser, async (req, res) => {
@@ -143,7 +310,7 @@ async function startServer() {
 
   app.put("/api/users/:id/status", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
-    if (caller.role !== Role.SUPER_ADMIN && caller.role !== Role.ADMIN && caller.role !== Role.PROJECT_MANAGER) {
+    if (!isManagerRole(caller.role)) {
       res.status(403).json({ error: "Only Admins or Project Managers can approve accounts." });
       return;
     }
@@ -163,7 +330,6 @@ async function startServer() {
       `Your account status has been updated to ${status} by ${caller.name}.`
     );
 
-    // Deliver resend notification for account approval
     if (updated.email) {
       await deliverFormattedNotification({
         recipientName: updated.name,
@@ -185,6 +351,13 @@ async function startServer() {
   });
 
   app.put("/api/users/:id/details", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    // Only managers/admins can change OTHER users' role/team. A user editing
+    // their own record here would previously have been allowed implicitly.
+    if (!isManagerRole(caller.role) && caller.id !== req.params.id) {
+      res.status(403).json({ error: "You don't have permission to edit this user." });
+      return;
+    }
     const { role, teamId } = req.body;
     const userElem = await dbStore.getUserById(req.params.id);
     if (!userElem) {
@@ -192,6 +365,10 @@ async function startServer() {
       return;
     }
     if (role && Object.values(Role).includes(role)) {
+      if (!isManagerRole(caller.role)) {
+        res.status(403).json({ error: "Only Admins or Project Managers can change roles." });
+        return;
+      }
       await dbStore.updateUserRole(req.params.id, role);
     }
     await dbStore.updateUserTeam(req.params.id, teamId === "none" ? undefined : (teamId || undefined));
@@ -202,7 +379,7 @@ async function startServer() {
 
   app.put("/api/users/:id/role", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
-    if (caller.role !== Role.SUPER_ADMIN && caller.role !== Role.ADMIN) {
+    if (!isAdminRole(caller.role)) {
       res.status(403).json({ error: "Only administrators can assign roles." });
       return;
     }
@@ -222,7 +399,6 @@ async function startServer() {
       `Your core role has been updated to ${role} by Administrator ${caller.name}.`
     );
 
-    // Send role update alert
     if (updated.email) {
       await deliverFormattedNotification({
         recipientName: updated.name,
@@ -280,7 +456,6 @@ async function startServer() {
 
     await dbStore.createActivity(project.id, caller.id, caller.name, "project_created", `Created project: "${project.name}"`);
 
-    // Notify project members + Send Email
     for (const mId of project.members) {
       if (mId !== caller.id) {
         await dbStore.createNotification(mId, "assignment", `You have been added to the project: ${project.name}`, project.id);
@@ -315,8 +490,19 @@ async function startServer() {
       return;
     }
 
-    // Cloudinary cleanup if coverImageUrl changes
-    if (req.body.coverImageUrl && project.coverImageUrl && req.body.coverImageUrl !== project.coverImageUrl) {
+    if (!canManageProject(caller, project)) {
+      res.status(403).json({ error: "You don't have permission to edit this project." });
+      return;
+    }
+
+    // Cloudinary cleanup if coverImageUrl changes — scoped to our own folder
+    // so a client can't trick us into deleting an arbitrary Cloudinary asset.
+    if (
+      req.body.coverImageUrl &&
+      project.coverImageUrl &&
+      req.body.coverImageUrl !== project.coverImageUrl &&
+      project.coverImageUrl.includes(`/${CLOUDINARY_FOLDER}/`)
+    ) {
       await deleteFromCloudinary(project.coverImageUrl);
     }
 
@@ -333,6 +519,11 @@ async function startServer() {
     const project = await dbStore.getProjectById(req.params.id);
     if (!project) {
       res.status(404).json({ error: "Project not found" });
+      return;
+    }
+
+    if (!canManageProject(caller, project)) {
+      res.status(403).json({ error: "You don't have permission to delete this project." });
       return;
     }
 
@@ -384,10 +575,17 @@ async function startServer() {
     tasks.forEach(task => {
       task.timeLogs.forEach(log => {
         const worker = users.find(u => u.id === log.userId)?.name || "Unknown";
-        const cleanedNote = (log.note || "").replace(/"/g, '""');
         const loggedDate = log.createdAt ? log.createdAt.split("T")[0] : "";
         const trackingType = log.startTime ? "Tracked Interval" : "Manual";
-        csvContent += `"${task.title}","${task.category}","${worker}",${log.hours},"${trackingType}","${loggedDate}","${cleanedNote}"\n`;
+        csvContent += [
+          csvField(task.title),
+          csvField(task.category),
+          csvField(worker),
+          csvField(String(log.hours)),
+          csvField(trackingType),
+          csvField(loggedDate),
+          csvField(log.note || ""),
+        ].join(",") + "\n";
       });
     });
 
@@ -401,7 +599,6 @@ async function startServer() {
     const { projectId } = req.query;
     const tasks = await dbStore.getTasks(projectId ? String(projectId) : undefined);
 
-    // Enrich tasks with project names
     const enriched = await Promise.all(tasks.map(async t => {
       const proj = await dbStore.getProjectById(t.projectId);
       return {
@@ -439,6 +636,33 @@ async function startServer() {
       return;
     }
 
+    if (!canManageProject(caller, project)) {
+      res.status(403).json({ error: "You don't have permission to add tasks to this project." });
+      return;
+    }
+
+    // Validate assignees reference real, approved users / existing teams.
+    const cleanAssignees: { userId?: string; teamId?: string }[] = [];
+    if (Array.isArray(assignees)) {
+      for (const a of assignees) {
+        if (a.userId) {
+          const u = await dbStore.getUserById(a.userId);
+          if (u) cleanAssignees.push({ userId: u.id });
+        } else if (a.teamId) {
+          const t = await dbStore.getTeamById(a.teamId);
+          if (t) cleanAssignees.push({ teamId: t.id });
+        }
+      }
+    }
+
+    // Validate dependencies reference real tasks in the same project.
+    let cleanDependencies: string[] = [];
+    if (Array.isArray(dependencies) && dependencies.length > 0) {
+      const projectTasks = await dbStore.getTasks(projectId, true);
+      const validIds = new Set(projectTasks.map(t => t.id));
+      cleanDependencies = dependencies.filter((d: string) => validIds.has(d));
+    }
+
     const task = await dbStore.createTask({
       projectId,
       title,
@@ -448,11 +672,10 @@ async function startServer() {
       category,
       dueDate,
       estimatedHours: Number(estimatedHours) || 0,
-      assignees: assignees || [],
-      dependencies: dependencies || []
+      assignees: cleanAssignees,
+      dependencies: cleanDependencies
     });
 
-    // Send notifications + email alerts to assignees
     for (const asn of task.assignees) {
       if (asn.userId) {
         await dbStore.createNotification(
@@ -480,7 +703,6 @@ async function startServer() {
           });
         }
       } else if (asn.teamId) {
-        // Find users in team to notify
         const users = (await dbStore.getUsers()).filter(u => u.teamId === asn.teamId);
         for (const u of users) {
           await dbStore.createNotification(
@@ -515,9 +737,16 @@ async function startServer() {
   });
 
   app.put("/api/tasks/:id", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
     const task = await dbStore.getTaskById(req.params.id);
     if (!task) {
       res.status(404).json({ error: "Task not found" });
+      return;
+    }
+
+    const project = await dbStore.getProjectById(task.projectId);
+    if (!project || !canManageProject(caller, project)) {
+      res.status(403).json({ error: "You don't have permission to edit this task." });
       return;
     }
 
@@ -538,9 +767,29 @@ async function startServer() {
       }
     }
 
-    const caller = (req as any).user;
+    // Re-validate assignees/dependencies if the client is changing them.
+    const patch = { ...req.body };
+    if (Array.isArray(patch.assignees)) {
+      const cleanAssignees: { userId?: string; teamId?: string }[] = [];
+      for (const a of patch.assignees) {
+        if (a.userId) {
+          const u = await dbStore.getUserById(a.userId);
+          if (u) cleanAssignees.push({ userId: u.id });
+        } else if (a.teamId) {
+          const t = await dbStore.getTeamById(a.teamId);
+          if (t) cleanAssignees.push({ teamId: t.id });
+        }
+      }
+      patch.assignees = cleanAssignees;
+    }
+    if (Array.isArray(patch.dependencies)) {
+      const projectTasks = await dbStore.getTasks(task.projectId, true);
+      const validIds = new Set(projectTasks.filter(t => t.id !== task.id).map(t => t.id));
+      patch.dependencies = patch.dependencies.filter((d: string) => validIds.has(d));
+    }
+
     const originalStatus = task.status;
-    const updated = await dbStore.updateTask(req.params.id, req.body);
+    const updated = await dbStore.updateTask(req.params.id, patch);
 
     if (updated) {
       if (originalStatus !== updated.status) {
@@ -550,12 +799,9 @@ async function startServer() {
       }
     }
 
-    // Delivery notifications when task transitions to Completed ("Done")
     if (updated && originalStatus !== "Done" && updated.status === "Done") {
-      const project = await dbStore.getProjectById(updated.projectId);
       const owner = project ? await dbStore.getUserById(project.ownerId) : null;
 
-      // Notify project owner
       if (owner) {
         await dbStore.createNotification(
           owner.id,
@@ -581,7 +827,6 @@ async function startServer() {
         }
       }
 
-      // Notify other assignees as well
       for (const asn of updated.assignees) {
         if (asn.userId && asn.userId !== (owner ? owner.id : "")) {
           const assignee = await dbStore.getUserById(asn.userId);
@@ -614,6 +859,13 @@ async function startServer() {
       res.status(404).json({ error: "Task not found." });
       return;
     }
+
+    const project = await dbStore.getProjectById(task.projectId);
+    if (!project || !canManageProject(caller, project)) {
+      res.status(403).json({ error: "You don't have permission to delete this task." });
+      return;
+    }
+
     await dbStore.deleteTask(req.params.id);
     await dbStore.createActivity(task.projectId, caller.id, caller.name, "task_trashed", `Moved task "${task.title}" to Trash box`);
     res.json({ success: true, message: "Task moved to Trash box (will be deleted permanently in 15 days)." });
@@ -665,7 +917,6 @@ async function startServer() {
 
     const comment = await dbStore.createComment(taskId, caller.id, content);
 
-    // Log comment added on project details activity stream
     const taskObj = await dbStore.getTaskById(taskId);
     if (taskObj) {
       const strippedContent = content.replace(/<[^>]*>/g, '').substring(0, 60);
@@ -673,6 +924,29 @@ async function startServer() {
     }
 
     res.status(201).json(comment);
+  });
+
+  // Edit a comment — only the original author may edit their own comment.
+  app.put("/api/comments/:id", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    const { content } = req.body;
+    if (!content || typeof content !== "string") {
+      res.status(400).json({ error: "Comment content is required." });
+      return;
+    }
+
+    const existing = await dbStore.getCommentById(req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: "Comment not found." });
+      return;
+    }
+    if (existing.userId !== caller.id && !isAdminRole(caller.role)) {
+      res.status(403).json({ error: "You can only edit your own comments." });
+      return;
+    }
+
+    const updated = await dbStore.updateComment(req.params.id, content);
+    res.json(updated);
   });
 
   // --- TEAMS ENDPOINTS ---
@@ -690,6 +964,10 @@ async function startServer() {
 
   app.post("/api/teams", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
+    if (!isManagerRole(caller.role)) {
+      res.status(403).json({ error: "Only Admins or Project Managers can create teams." });
+      return;
+    }
     const { name, description, leadId } = req.body;
     if (!name || !leadId) {
       res.status(400).json({ error: "Team name and team lead assignment are required." });
@@ -702,7 +980,7 @@ async function startServer() {
 
   app.put("/api/teams/:id", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
-    if (caller.role !== Role.SUPER_ADMIN && caller.role !== Role.ADMIN && caller.role !== Role.PROJECT_MANAGER) {
+    if (!isManagerRole(caller.role)) {
       res.status(403).json({ error: "Access Denied. Only workspace administrators or project managers can edit teams." });
       return;
     }
@@ -725,7 +1003,89 @@ async function startServer() {
 
   app.delete("/api/teams/:id", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
+    if (!isManagerRole(caller.role)) {
+      res.status(403).json({ error: "Access Denied. Only workspace administrators or project managers can disband teams." });
+      return;
+    }
     await dbStore.deleteTeam(req.params.id);
+    res.json({ success: true });
+  });
+
+  // --- INVITATIONS ENDPOINTS ---
+  app.get("/api/invitations", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    if (!isManagerRole(caller.role)) {
+      res.status(403).json({ error: "Only Admins or Project Managers can view invitations." });
+      return;
+    }
+    const invitations = await dbStore.getInvitations();
+    res.json(invitations);
+  });
+
+  app.post("/api/invitations", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    if (!isManagerRole(caller.role)) {
+      res.status(403).json({ error: "Only Admins or Project Managers can create invitations." });
+      return;
+    }
+    const { email, role, teamId, teamName, usedLimit, plan } = req.body;
+    if (!role || !Object.values(Role).includes(role)) {
+      res.status(400).json({ error: "A valid role is required." });
+      return;
+    }
+
+    const id = "inv_" + crypto.randomBytes(9).toString("hex");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const invitation = await dbStore.createInvitation({
+      id,
+      createdBy: caller.id,
+      creatorName: caller.name,
+      email: email || undefined,
+      role,
+      teamId: teamId || undefined,
+      teamName: teamName || undefined,
+      usedLimit: typeof usedLimit === "number" ? usedLimit : 1,
+      plan: plan || "Free",
+      expiresAt,
+    } as any);
+
+    res.status(201).json(invitation);
+  });
+
+  // Public — used by the registration page to validate a token before signup.
+  app.get("/api/invitations/validate/:token", async (req, res) => {
+    const invite = await dbStore.getInvitationById(req.params.token);
+    if (!invite) {
+      res.status(404).json({ valid: false, error: "Invitation not found." });
+      return;
+    }
+    if (invite.status !== "active") {
+      res.status(400).json({ valid: false, error: "Invitation is no longer valid.", reason: invite.status });
+      return;
+    }
+    res.json({
+      valid: true,
+      invite: {
+        role: invite.role,
+        teamId: invite.teamId,
+        teamName: invite.teamName,
+        email: invite.email,
+      },
+    });
+  });
+
+  app.post("/api/invitations/:id/revoke", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    if (!isManagerRole(caller.role)) {
+      res.status(403).json({ error: "Only Admins or Project Managers can revoke invitations." });
+      return;
+    }
+    const ok = await dbStore.revokeInvitation(req.params.id);
+    if (!ok) {
+      res.status(404).json({ error: "Invitation not found." });
+      return;
+    }
     res.json({ success: true });
   });
 
@@ -747,16 +1107,33 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // --- CLOUDINARY FILE UPLOAD ROUTET ---
+  // --- CLOUDINARY FILE UPLOAD ---
+  const ALLOWED_IMAGE_EXT = /\.(jpe?g|png|gif|webp)$/i;
+  const ALLOWED_DOC_EXT = /\.(pdf|docx?|xlsx?|pptx?|csv|txt)$/i;
+
   app.post("/api/cloudinary/upload", authenticateUser, async (req, res) => {
-    const { base64Data, filename } = req.body;
+    const { base64Data, filename, kind } = req.body;
     if (!base64Data || !filename) {
       res.status(400).json({ error: "base64Data and filename parameters are mandatory." });
       return;
     }
 
+    // Basic allowlist: cover/avatar-style uploads must be an image; generic
+    // "file" attachments may also be common document types. This blocks
+    // uploading executable/HTML/SVG (XSS-capable) content disguised as files.
+    const isImage = ALLOWED_IMAGE_EXT.test(filename);
+    const isDoc = ALLOWED_DOC_EXT.test(filename);
+    if (kind === "cover" && !isImage) {
+      res.status(400).json({ error: "Cover images must be JPG, PNG, GIF, or WEBP." });
+      return;
+    }
+    if (!isImage && !isDoc) {
+      res.status(400).json({ error: "Unsupported file type." });
+      return;
+    }
+
     try {
-      const result = await uploadToCloudinary(base64Data, filename, "projectflow_workspace");
+      const result = await uploadToCloudinary(base64Data, filename, CLOUDINARY_FOLDER);
       res.status(201).json({
         url: result.url,
         simulated: result.simulated
@@ -772,6 +1149,11 @@ async function startServer() {
       res.status(400).json({ error: "url is mandatory to clean up." });
       return;
     }
+    // Only allow deleting assets inside our own managed folder.
+    if (!url.includes(`/${CLOUDINARY_FOLDER}/`)) {
+      res.status(400).json({ error: "URL is not a managed ProjectFlow asset." });
+      return;
+    }
 
     try {
       const ok = await deleteFromCloudinary(url);
@@ -783,6 +1165,7 @@ async function startServer() {
 
   // --- DIRECT FILE ATTACHMENTS & CONFIRM ---
   app.post("/api/files/confirm", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
     const { projectId, name, url, category } = req.body;
     if (!projectId || !name || !url) {
       res.status(400).json({ error: "Project, file name, and file link are required." });
@@ -795,8 +1178,13 @@ async function startServer() {
       return;
     }
 
+    if (!canManageProject(caller, project)) {
+      res.status(403).json({ error: "You don't have permission to attach files to this project." });
+      return;
+    }
+
     const fileItem = {
-      id: "file_" + Math.random().toString(36).substr(2, 9),
+      id: "file_" + crypto.randomBytes(8).toString("hex"),
       name,
       url,
       category: category || "Specification",
@@ -806,7 +1194,6 @@ async function startServer() {
     project.files.push(fileItem);
     await dbStore.updateProject(projectId, { files: project.files });
 
-    const caller = (req as any).user;
     await dbStore.createActivity(projectId, caller.id, caller.name, "file_uploaded", `Uploaded & registered document "${name}" under "${category || "Specification"}"`);
 
     res.status(201).json(fileItem);
@@ -839,6 +1226,10 @@ async function startServer() {
     try {
       if (type === "project") {
         const project = await dbStore.getProjectById(id);
+        if (project && !canManageProject(caller, project)) {
+          res.status(403).json({ error: "You don't have permission to restore this project." });
+          return;
+        }
         await dbStore.restoreProject(id);
         if (project) {
           await dbStore.createActivity(id, caller.id, caller.name, "project_restored", `Restored project "${project.name}" from Trash box`);
@@ -846,6 +1237,13 @@ async function startServer() {
         res.json({ success: true, message: "Project and assigned task cards restored successfully." });
       } else if (type === "task") {
         const task = await dbStore.getTaskById(id);
+        if (task) {
+          const project = await dbStore.getProjectById(task.projectId);
+          if (project && !canManageProject(caller, project)) {
+            res.status(403).json({ error: "You don't have permission to restore this task." });
+            return;
+          }
+        }
         await dbStore.restoreTask(id);
         if (task) {
           await dbStore.createActivity(task.projectId, caller.id, caller.name, "task_restored", `Restored task "${task.title}" from Trash box`);
@@ -860,24 +1258,38 @@ async function startServer() {
   });
 
   app.delete("/api/trash/delete/:type/:id", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
     const { type, id } = req.params;
     try {
       if (type === "project") {
         const project = await dbStore.getProjectById(id);
+        if (project && !canManageProject(caller, project)) {
+          res.status(403).json({ error: "You don't have permission to permanently delete this project." });
+          return;
+        }
         if (project) {
-          // Permanently erase files from Cloudinary
-          if (project.coverImageUrl) {
+          if (project.coverImageUrl?.includes(`/${CLOUDINARY_FOLDER}/`)) {
             await deleteFromCloudinary(project.coverImageUrl).catch(e => console.error("Cloudinary cover deletion error:", e));
           }
           if (project.files && project.files.length > 0) {
             for (const file of project.files) {
-              await deleteFromCloudinary(file.url).catch(e => console.error("Cloudinary file deletion error:", e));
+              if (file.url?.includes(`/${CLOUDINARY_FOLDER}/`)) {
+                await deleteFromCloudinary(file.url).catch(e => console.error("Cloudinary file deletion error:", e));
+              }
             }
           }
         }
         await dbStore.deleteProjectPermanent(id);
         res.json({ success: true, message: "Project and linked Cloudinary documents permanently deleted." });
       } else if (type === "task") {
+        const task = await dbStore.getTaskById(id);
+        if (task) {
+          const project = await dbStore.getProjectById(task.projectId);
+          if (project && !canManageProject(caller, project)) {
+            res.status(403).json({ error: "You don't have permission to permanently delete this task." });
+            return;
+          }
+        }
         await dbStore.deleteTaskPermanent(id);
         res.json({ success: true, message: "Task card and logged comments deleted permanently." });
       } else {
@@ -897,12 +1309,14 @@ async function startServer() {
       for (const proj of trashedProjects) {
         if (proj.deletedAt && new Date(proj.deletedAt) < fifteenDaysAgo) {
           console.log(`[GARBAGE COLLECTION] Permanently purging project "${proj.name}" (ID: ${proj.id})`);
-          if (proj.coverImageUrl) {
+          if (proj.coverImageUrl?.includes(`/${CLOUDINARY_FOLDER}/`)) {
             await deleteFromCloudinary(proj.coverImageUrl).catch(e => console.error(e));
           }
           if (proj.files && proj.files.length > 0) {
             for (const f of proj.files) {
-              await deleteFromCloudinary(f.url).catch(e => console.error(e));
+              if (f.url?.includes(`/${CLOUDINARY_FOLDER}/`)) {
+                await deleteFromCloudinary(f.url).catch(e => console.error(e));
+              }
             }
           }
           await dbStore.deleteProjectPermanent(proj.id);
@@ -920,6 +1334,39 @@ async function startServer() {
       console.error("[GARBAGE COLLECTION] Error inside periodic vacuum job:", err);
     }
   }
+
+  // --- AI PROXY (keeps the Gemini key server-side only) ---
+  app.post("/api/ai/generate", authenticateUser, async (req, res) => {
+    const { prompt } = req.body;
+    if (!prompt || typeof prompt !== "string") {
+      res.status(400).json({ error: "A prompt string is required." });
+      return;
+    }
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      res.status(503).json({ error: "AI generation is not configured on this server." });
+      return;
+    }
+    try {
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        }
+      );
+      if (!r.ok) {
+        res.status(502).json({ error: `AI provider error: ${r.status}` });
+        return;
+      }
+      const data = await r.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+      res.json({ text });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "AI generation failed." });
+    }
+  });
 
   // --- VITE MIDDLEWARE FOR DEVELOPMENT OR STATIC FOR PRODUCTION ---
   if (process.env.NODE_ENV !== "production") {
@@ -939,12 +1386,10 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`ProjectFlow full-stack server running on http://localhost:${PORT}`);
 
-    // Trigger Trash Cleanup scanner 10 seconds post startup
     setTimeout(() => {
       runTrashAutoCleanup().catch(e => console.error("Initial cleanup pass failed:", e));
     }, 10000);
 
-    // Schedule Trash Cleanup scanner to run every 30 minutes
     setInterval(() => {
       runTrashAutoCleanup().catch(e => console.error("Periodic cleanup pass failed:", e));
     }, 30 * 60 * 1000);
@@ -953,4 +1398,5 @@ async function startServer() {
 
 startServer().catch(err => {
   console.error("Failed to start server:", err);
+  process.exit(1);
 });

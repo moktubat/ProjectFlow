@@ -5,6 +5,7 @@
 
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import { User, Project, Task, Team, Comment, Notification, Role, UserStatus, Activity, Invitation } from "../src/types/index.js";
@@ -12,6 +13,22 @@ import { User, Project, Task, Team, Comment, Notification, Role, UserStatus, Act
 dotenv.config();
 
 const STORE_PATH = path.join(process.cwd(), "server", "store.json");
+
+// Short, URL/ID-safe random suffix generator backed by crypto, replacing the
+// old Math.random().toString(36) approach (low entropy, not collision-safe,
+// and — since these IDs doubled as bearer tokens in the old auth flow —
+// guessable). Sessions/tokens use crypto.randomBytes directly; this helper
+// is just for readable, prefixed entity IDs (usr_..., proj_..., etc.).
+function genId(prefix: string): string {
+  return `${prefix}_${crypto.randomBytes(9).toString("hex")}`;
+}
+
+interface SessionRecord {
+  token: string;
+  userId: string;
+  expiresAt: string;
+  createdAt: string;
+}
 
 interface DatabaseSchema {
   users: User[];
@@ -22,6 +39,7 @@ interface DatabaseSchema {
   notifications: Notification[];
   activities: Activity[];
   invitations: Invitation[];
+  sessions: SessionRecord[];
 }
 
 const initialDb: DatabaseSchema = {
@@ -32,7 +50,8 @@ const initialDb: DatabaseSchema = {
   comments: [],
   notifications: [],
   activities: [],
-  invitations: []
+  invitations: [],
+  sessions: []
 };
 
 // Ensure server folder exists
@@ -48,7 +67,10 @@ function readDb(): DatabaseSchema {
       return initialDb;
     }
     const data = fs.readFileSync(STORE_PATH, "utf8");
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    // Backward-compat: older store.json files won't have a `sessions` array yet.
+    if (!parsed.sessions) parsed.sessions = [];
+    return parsed;
   } catch (err) {
     console.error("Failed to read database store:", err);
     return initialDb;
@@ -67,8 +89,14 @@ function writeDb(data: DatabaseSchema) {
 const MONGODB_URI = process.env.MONGODB_URI;
 let isMongoConnected = false;
 
+// Exposed so server.ts can `await` full connection readiness before
+// accepting traffic, instead of relying on the isMongoConnected flag alone
+// (which previously could still be false for early in-flight requests).
+let mongoReadyPromise: Promise<void> = Promise.resolve();
+
 if (MONGODB_URI) {
-  mongoose.connect(MONGODB_URI)
+  mongoReadyPromise = mongoose
+    .connect(MONGODB_URI)
     .then(() => {
       isMongoConnected = true;
       console.log("[MONGO SUCCESS] Connected to MongoDB Atlas instance successfully.");
@@ -81,6 +109,8 @@ if (MONGODB_URI) {
 } else {
   console.log("[DATABASES INFO] No MONGODB_URI environment variable detected. Running local storage fallback.");
 }
+
+export const waitForDbReady = () => mongoReadyPromise;
 
 // Custom Mongoose Schemas using custom String primary keys (custom id like usr_..., proj_...)
 const UserSchema = new mongoose.Schema({
@@ -158,7 +188,8 @@ const CommentSchema = new mongoose.Schema({
   userName: { type: String, required: true },
   userRole: { type: String, required: true },
   content: { type: String, required: true },
-  createdAt: { type: String, required: true }
+  createdAt: { type: String, required: true },
+  editedAt: { type: String }
 }, { versionKey: false, _id: false });
 
 const NotificationSchema = new mongoose.Schema({
@@ -197,6 +228,15 @@ const InvitationSchema = new mongoose.Schema({
   createdAt: { type: String, required: true }
 }, { versionKey: false, _id: false });
 
+// Sessions are deliberately given a TTL index in Mongo so expired tokens are
+// automatically reaped without needing a manual cleanup job.
+const SessionSchema = new mongoose.Schema({
+  _id: { type: String, required: true }, // the token itself
+  userId: { type: String, required: true },
+  createdAt: { type: String, required: true },
+  expiresAt: { type: Date, required: true, expires: 0 }
+}, { versionKey: false, _id: false });
+
 const MongoUser = mongoose.models.User || mongoose.model("User", UserSchema);
 const MongoTeam = mongoose.models.Team || mongoose.model("Team", TeamSchema);
 const MongoProject = mongoose.models.Project || mongoose.model("Project", ProjectSchema);
@@ -205,6 +245,7 @@ const MongoComment = mongoose.models.Comment || mongoose.model("Comment", Commen
 const MongoNotification = mongoose.models.Notification || mongoose.model("Notification", NotificationSchema);
 const MongoActivity = mongoose.models.Activity || mongoose.model("Activity", ActivitySchema);
 const MongoInvitation = mongoose.models.Invitation || mongoose.model("Invitation", InvitationSchema);
+const MongoSession = mongoose.models.Session || mongoose.model("Session", SessionSchema);
 
 // Adapter Mapper Helpers
 function mapMongoDoc<T>(doc: any): T {
@@ -251,26 +292,15 @@ export const dbStore = {
   },
 
   createUser: async (user: Omit<User, "id" | "createdAt"> & { passwordHash: string }): Promise<User> => {
-    const id = "usr_" + Math.random().toString(36).substr(2, 9);
-    let usersCount = 0;
-
-    if (isMongoConnected) {
-      usersCount = await MongoUser.countDocuments({} as any);
-    } else {
-      usersCount = readDb().users.length;
-    }
-
-    // First user registered becomes automatic SUPER_ADMIN & APPROVED
-    const userRole = usersCount === 0 ? Role.SUPER_ADMIN : user.role;
-    const userStatus = usersCount === 0 ? UserStatus.APPROVED : user.status;
+    const id = genId("usr");
 
     const newUser = {
       _id: id,
       name: user.name,
       username: user.username,
       email: user.email,
-      role: userRole,
-      status: userStatus,
+      role: user.role,
+      status: user.status,
       teamId: user.teamId,
       passwordHash: user.passwordHash,
       createdAt: new Date().toISOString()
@@ -333,6 +363,69 @@ export const dbStore = {
     }
   },
 
+  // Used by the login flow to transparently upgrade legacy SHA-256 password
+  // hashes to bcrypt once a correct plaintext password has been verified.
+  updateUserPasswordHash: async (id: string, passwordHash: string): Promise<void> => {
+    if (isMongoConnected) {
+      await MongoUser.updateOne({ _id: id } as any, { passwordHash } as any);
+    } else {
+      const db = readDb();
+      const user = db.users.find(u => u.id === id);
+      if (user) {
+        (user as any).passwordHash = passwordHash;
+        writeDb(db);
+      }
+    }
+  },
+
+  // --- SESSIONS ---
+  // Opaque bearer tokens mapped to a userId + expiry. Tokens are generated
+  // by server.ts via crypto.randomBytes — this layer only persists/looks
+  // them up, mirroring the same Mongo/local-JSON dual-mode pattern used
+  // everywhere else in this file.
+  createSession: async (token: string, userId: string, expiresAt: string): Promise<void> => {
+    const createdAt = new Date().toISOString();
+    if (isMongoConnected) {
+      await MongoSession.create({ _id: token, userId, createdAt, expiresAt: new Date(expiresAt) } as any);
+    } else {
+      const db = readDb();
+      db.sessions.push({ token, userId, createdAt, expiresAt });
+      writeDb(db);
+    }
+  },
+
+  getSession: async (token: string): Promise<{ userId: string; expiresAt: string } | null> => {
+    if (isMongoConnected) {
+      const doc = await MongoSession.findOne({ _id: token } as any);
+      if (!doc) return null;
+      return { userId: doc.userId, expiresAt: doc.expiresAt.toISOString() };
+    }
+    const session = readDb().sessions.find(s => s.token === token);
+    return session ? { userId: session.userId, expiresAt: session.expiresAt } : null;
+  },
+
+  deleteSession: async (token: string): Promise<void> => {
+    if (isMongoConnected) {
+      await MongoSession.deleteOne({ _id: token } as any);
+    } else {
+      const db = readDb();
+      db.sessions = db.sessions.filter(s => s.token !== token);
+      writeDb(db);
+    }
+  },
+
+  // Invalidate every session belonging to a user — handy for "log out
+  // everywhere" flows or forced de-auth after a role/status change.
+  deleteSessionsForUser: async (userId: string): Promise<void> => {
+    if (isMongoConnected) {
+      await MongoSession.deleteMany({ userId } as any);
+    } else {
+      const db = readDb();
+      db.sessions = db.sessions.filter(s => s.userId !== userId);
+      writeDb(db);
+    }
+  },
+
   // --- PROJECTS ---
   getProjects: async (includeDeleted = false): Promise<Project[]> => {
     if (isMongoConnected) {
@@ -353,7 +446,7 @@ export const dbStore = {
   },
 
   createProject: async (project: Omit<Project, "id" | "files">): Promise<Project> => {
-    const id = "proj_" + Math.random().toString(36).substr(2, 9);
+    const id = genId("proj");
     const newProj = {
       _id: id,
       ...project,
@@ -485,7 +578,7 @@ export const dbStore = {
   },
 
   createTask: async (task: Omit<Task, "id" | "timeLogs">): Promise<Task> => {
-    const id = "tsk_" + Math.random().toString(36).substr(2, 9);
+    const id = genId("tsk");
     const newTsk = {
       _id: id,
       ...task,
@@ -577,7 +670,7 @@ export const dbStore = {
   },
 
   addTaskLog: async (taskId: string, log: Omit<any, "id" | "createdAt">): Promise<any> => {
-    const logId = "log_" + Math.random().toString(36).substr(2, 9);
+    const logId = genId("log");
     const newLog = {
       ...log,
       id: logId,
@@ -616,8 +709,16 @@ export const dbStore = {
     return comments;
   },
 
+  getCommentById: async (id: string): Promise<Comment | null> => {
+    if (isMongoConnected) {
+      const doc = await MongoComment.findOne({ _id: id } as any);
+      return mapMongoDoc<Comment>(doc);
+    }
+    return readDb().comments.find(c => c.id === id) || null;
+  },
+
   createComment: async (taskId: string, userId: string, content: string): Promise<Comment | null> => {
-    const id = "cmt_" + Math.random().toString(36).substr(2, 9);
+    const id = genId("cmt");
     let user: User | null = null;
 
     if (isMongoConnected) {
@@ -651,6 +752,28 @@ export const dbStore = {
     }
   },
 
+  // Edit an existing comment's content. Authorization (own-comment-only,
+  // unless admin) is enforced in server.ts before this is ever called.
+  updateComment: async (id: string, content: string): Promise<Comment | null> => {
+    const editedAt = new Date().toISOString();
+    if (isMongoConnected) {
+      const updated = await MongoComment.findOneAndUpdate(
+        { _id: id } as any,
+        { $set: { content, editedAt } } as any,
+        { new: true } as any
+      );
+      return mapMongoDoc<Comment>(updated);
+    } else {
+      const db = readDb();
+      const comment = db.comments.find(c => c.id === id);
+      if (!comment) return null;
+      comment.content = content;
+      (comment as any).editedAt = editedAt;
+      writeDb(db);
+      return comment;
+    }
+  },
+
   // --- TEAMS ---
   getTeams: async (): Promise<Team[]> => {
     if (isMongoConnected) {
@@ -669,7 +792,7 @@ export const dbStore = {
   },
 
   createTeam: async (name: string, description: string, leadId: string): Promise<Team> => {
-    const id = "team_" + Math.random().toString(36).substr(2, 9);
+    const id = genId("team");
     const team = {
       _id: id,
       name,
@@ -737,7 +860,7 @@ export const dbStore = {
   },
 
   createNotification: async (userId: string, type: string, message: string, relatedProjectId?: string): Promise<Notification> => {
-    const id = "notif_" + Math.random().toString(36).substr(2, 9);
+    const id = genId("notif");
     const notification = {
       _id: id,
       userId,
@@ -807,7 +930,7 @@ export const dbStore = {
   },
 
   createActivity: async (projectId: string, userId: string, userName: string, action: string, details: string): Promise<Activity> => {
-    const id = "act_" + Math.random().toString(36).substr(2, 9);
+    const id = genId("act");
     const activity = {
       _id: id,
       projectId,
@@ -841,7 +964,6 @@ export const dbStore = {
       list = readDb().invitations || [];
     }
 
-    // Auto-update status values based on expiration date checking
     const now = new Date();
     let dbChanged = false;
     const processed = list.map(inv => {
