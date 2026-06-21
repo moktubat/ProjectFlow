@@ -3,24 +3,32 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React from "react";
 import {
-    DndContext, DragEndEvent, DragOverEvent, DragStartEvent, DragOverlay,
-    PointerSensor, TouchSensor, useSensor, useSensors, closestCorners, useDroppable,
+    DndContext,
+    DragOverlay,
+    closestCorners,
+    useDroppable,
 } from "@dnd-kit/core";
-import { useSortable, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+    useSortable,
+    SortableContext,
+    verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Task, User } from "../../types/index.js";
 import { useUIStore } from "../../store/ui-store.js";
 import { Calendar, Clock, GitMerge, GripVertical } from "lucide-react";
+import {
+    useDragDropBoard,
+    BOARD_STATUSES,
+} from "../../hooks/useDragDropBoard.js";
 
 interface TaskListBoardProps {
     tasks: Task[];
     users: User[];
     onTaskUpdated: () => void;
 }
-
-const STATUSES: Task["status"][] = ["To Do", "In Progress", "Review", "Done"];
 
 const STATUS_STYLES: Record<string, { dot: string; text: string; bg: string }> = {
     "To Do": { dot: "bg-[#A0A0A0]", text: "text-[#525252]", bg: "bg-[#F4F4F4]/60" },
@@ -36,7 +44,15 @@ const PRIORITY_STYLES: Record<string, string> = {
     Critical: "bg-red-50 text-red-700",
 };
 
-function TaskListRow({ task, users, isOverlay = false }: { task: Task; users: User[]; isOverlay?: boolean }) {
+function TaskListRow({
+    task,
+    users,
+    isOverlay = false,
+}: {
+    task: Task;
+    users: User[];
+    isOverlay?: boolean;
+}) {
     const navigate = useUIStore((s) => s.navigate);
     const logged = task.timeLogs.reduce((s, l) => s + l.hours, 0);
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -49,7 +65,8 @@ function TaskListRow({ task, users, isOverlay = false }: { task: Task; users: Us
         zIndex: isDragging ? 999 : undefined,
     };
 
-    const getUserInitial = (id: string) => users.find((u) => u.id === id)?.name.charAt(0).toUpperCase() ?? "?";
+    const getUserInitial = (id: string) =>
+        users.find((u) => u.id === id)?.name.charAt(0).toUpperCase() ?? "?";
     const getUserName = (id: string) => users.find((u) => u.id === id)?.name ?? "Unknown";
 
     return (
@@ -116,8 +133,16 @@ function TaskListRow({ task, users, isOverlay = false }: { task: Task; users: Us
 }
 
 function TaskListSection({
-    status, tasks, users, isAnyDragging,
-}: { status: Task["status"]; tasks: Task[]; users: User[]; isAnyDragging: boolean }) {
+    status,
+    tasks,
+    users,
+    isAnyDragging,
+}: {
+    status: Task["status"];
+    tasks: Task[];
+    users: User[];
+    isAnyDragging: boolean;
+}) {
     const { setNodeRef, isOver } = useDroppable({ id: status });
     const style = STATUS_STYLES[status];
 
@@ -153,80 +178,19 @@ function TaskListSection({
 }
 
 export function TaskListBoard({ tasks, users, onTaskUpdated }: TaskListBoardProps) {
-    const [localTasks, setLocalTasks] = useState<Task[]>(tasks);
-    const [activeTask, setActiveTask] = useState<Task | null>(null);
-    const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const token = useUIStore((s) => s.token);
-    const isDragging = useRef(false);
-
-    useEffect(() => {
-        if (!isDragging.current) setLocalTasks(tasks);
-    }, [tasks]);
-
-    const handleNativeDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); }, []);
-    const handleNativeDrop = useCallback((e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); }, []);
-
-    const sensors = useSensors(
-        useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-        useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } })
-    );
-
-    const handleDragStart = useCallback((event: DragStartEvent) => {
-        isDragging.current = true;
-        setErrorMsg(null);
-        const task = localTasks.find((t) => t.id === event.active.id);
-        setActiveTask(task ?? null);
-    }, [localTasks]);
-
-    const handleDragOver = useCallback((event: DragOverEvent) => {
-        const { active, over } = event;
-        if (!over) return;
-        const activeId = active.id as string;
-        const overId = over.id as string;
-        const overTask = localTasks.find((t) => t.id === overId);
-        const overStatus = overTask ? overTask.status : STATUSES.includes(overId as any) ? (overId as Task["status"]) : null;
-        if (!overStatus) return;
-        setLocalTasks((prev) => prev.map((t) => (t.id === activeId ? { ...t, status: overStatus } : t)));
-    }, [localTasks]);
-
-    const handleDragEnd = useCallback(async (event: DragEndEvent) => {
-        isDragging.current = false;
-        setActiveTask(null);
-        const { active, over } = event;
-        if (!over || !token) return;
-        const activeId = active.id as string;
-        const movedTask = localTasks.find((t) => t.id === activeId);
-        if (!movedTask) return;
-        const newStatus = movedTask.status;
-        const originalTask = tasks.find((t) => t.id === activeId);
-        if (!originalTask || originalTask.status === newStatus) return;
-
-        try {
-            const res = await fetch(`/api/tasks/${activeId}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ status: newStatus }),
-            });
-            if (!res.ok) {
-                const data = await res.json();
-                setLocalTasks(tasks);
-                setErrorMsg(data.error || "Could not move task — change rolled back.");
-                setTimeout(() => setErrorMsg(null), 4000);
-            } else {
-                onTaskUpdated();
-            }
-        } catch {
-            setLocalTasks(tasks);
-            setErrorMsg("Network error — task move rolled back.");
-            setTimeout(() => setErrorMsg(null), 4000);
-        }
-    }, [localTasks, tasks, token, onTaskUpdated]);
-
-    const handleDragCancel = useCallback(() => {
-        isDragging.current = false;
-        setActiveTask(null);
-        setLocalTasks(tasks);
-    }, [tasks]);
+    const {
+        localTasks,
+        activeTask,
+        errorMsg,
+        sensors,
+        handleDragStart,
+        handleDragOver,
+        handleDragEnd,
+        handleDragCancel,
+        handleNativeDragOver,
+        handleNativeDrop,
+    } = useDragDropBoard(tasks, token, onTaskUpdated);
 
     return (
         <div className="space-y-3" onDragOver={handleNativeDragOver} onDrop={handleNativeDrop}>
@@ -248,7 +212,7 @@ export function TaskListBoard({ tasks, users, onTaskUpdated }: TaskListBoardProp
                 onDragCancel={handleDragCancel}
             >
                 <div className="space-y-3">
-                    {STATUSES.map((s) => (
+                    {BOARD_STATUSES.map((s) => (
                         <TaskListSection
                             key={s}
                             status={s}

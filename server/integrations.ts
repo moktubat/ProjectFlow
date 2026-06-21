@@ -117,7 +117,9 @@ export async function uploadToCloudinary(
 
     // Derive a clean public_id from the filename (strip extension)
     const lastDot = filename.lastIndexOf(".");
-    const publicId = lastDot !== -1 ? filename.substring(0, lastDot) : filename;
+    const rawName = lastDot !== -1 ? filename.substring(0, lastDot) : filename;
+    const publicId = rawName.replace(/[,/\\]/g, "_");
+
 
     const result = await cloudinary.uploader.upload(base64Data, {
       folder: folderName,
@@ -196,20 +198,26 @@ export async function sendEmail({
     const fromAddress =
       process.env.RESEND_FROM_EMAIL ?? "ProjectFlow <onboarding@resend.dev>";
 
-    const data = await resendInstance.emails.send({
+    const { data, error } = await resendInstance.emails.send({
       from: fromAddress,
       to,
       subject,
       html,
     });
 
-    console.log(`[RESEND] Email delivered to ${to}. ID:`, data);
+    if (error) {
+      console.error(`[RESEND] Rejected for ${to}:`, error.message ?? error);
+      return { success: false, error: error.message ?? String(error) };
+    }
+
+    console.log(`[RESEND] Email delivered to ${to}. ID:`, data?.id);
     return { success: true, data };
   } catch (error: any) {
     console.error(`[RESEND] Failed to send to ${to}:`, error.message ?? error);
     return { success: false, error: error.message ?? String(error) };
   }
 }
+
 
 // ─── Formatted notification email ─────────────────────────────────────────────
 

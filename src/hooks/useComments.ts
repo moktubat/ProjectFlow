@@ -18,6 +18,7 @@ export function useComments(taskId?: string) {
     setIsLoading(true);
     setError(null);
     try {
+      // Global fetch interceptor handles 401/403 automatically
       const res = await fetch(`/api/comments?taskId=${taskId}`, {
         headers: {
           Authorization: `Bearer ${token}`

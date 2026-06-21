@@ -12,7 +12,7 @@ interface UIState {
   currentPath: string; // e.g., 'dashboard', 'projects', 'projects/proj_id', 'tasks', 'tasks/tsk_id', 'teams', 'users'
   notifications: Notification[];
   sidebarOpen: boolean;
-  
+
   // Actions
   setSession: (user: User | null, token: string | null) => void;
   logout: () => void;
@@ -54,6 +54,9 @@ export const useUIStore = create<UIState>((set) => ({
   },
 
   logout: () => {
+    const alreadyLoggedOut = useUIStore.getState().token === null;
+    if (alreadyLoggedOut) return;
+
     localStorage.removeItem("projectflow_user");
     localStorage.removeItem("projectflow_token");
     set({ user: null, token: null, currentPath: "login", notifications: [], sidebarOpen: false });

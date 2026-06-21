@@ -402,14 +402,6 @@ export function ProjectsView() {
                 PRIORITY_META[proj.priority as keyof typeof PRIORITY_META] ??
                 PRIORITY_META["Medium"];
 
-              if (!STATUS_META[proj.status as keyof typeof STATUS_META]) {
-                console.warn("Invalid status:", proj.status, proj);
-              }
-
-              if (!PRIORITY_META[proj.priority as keyof typeof PRIORITY_META]) {
-                console.warn("Invalid priority:", proj.priority, proj);
-              }
-
               const overdue = proj.status !== "Completed" && new Date(proj.endDate) < new Date();
               const ringValue = stats.total ? stats.pct : proj.status === "Completed" ? 100 : 0;
               const barValue = stats.total ? stats.pct : proj.status === "Completed" ? 100 : 6;

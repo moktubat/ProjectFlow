@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Bold, Italic, Code, Link, Heading1, List, Sparkles, AlertCircle } from "lucide-react";
 import { useUIStore } from "../../store/ui-store.js";
+import DOMPurify from "dompurify";
 
 interface TipTapEditorProps {
   value: string;
@@ -114,7 +115,7 @@ export function TipTapEditor({ value, onChange, placeholder = "Write something..
                 .replace(/\[(.*?)\]\((.*?)\)/g, "<a href='$2' class='text-[#0038BC] underline'>$1</a>");
               if (line.startsWith("# ")) return <h3 key={i} className="font-semibold text-[#111111]">{line.slice(2)}</h3>;
               if (line.startsWith("- ")) return <li key={i} className="ml-4 list-disc">{line.slice(2)}</li>;
-              return <p key={i} dangerouslySetInnerHTML={{ __html: html }} />;
+              return <p key={i} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }} />;
             }) : <span className="text-[#A0A0A0] italic">Nothing to preview.</span>}
           </div>
         )}

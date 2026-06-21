@@ -13,22 +13,21 @@ import {
   HelpCircle, CheckSquare, Plus, Trash2, CheckCircle2, Circle,
   Pencil, Check, X, Sparkles, Send,
 } from "lucide-react";
+import DOMPurify from "dompurify";
 
 // ─── Gemini helper ────────────────────────────────────────────────────────────
-async function geminiGenerate(prompt: string): Promise<string> {
-  const key = (import.meta as any).env?.VITE_GEMINI_API_KEY || "";
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-    }
-  );
-  if (!res.ok) throw new Error("Gemini API error: " + res.status);
+async function geminiGenerate(prompt: string, token: string | null): Promise<string> {
+  if (!token) throw new Error("You must be signed in to use AI generation.");
+  const res = await fetch("/api/ai/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ prompt }),
+  });
   const data = await res.json();
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  if (!res.ok) throw new Error(data.error || `AI generation failed (${res.status}).`);
+  return data.text ?? "";
 }
+
 
 // ─── Inline-editable title ────────────────────────────────────────────────────
 function EditableTitle({
@@ -87,9 +86,11 @@ function EditableTitle({
 function SubTaskList({
   subTasks,
   onUpdate,
+  token,
 }: {
   subTasks: SubTask[];
   onUpdate: (sub: SubTask[]) => Promise<void>;
+  token: string | null;
 }) {
   const [newTitle, setNewTitle] = useState("");
   const [adding, setAdding] = useState(false);
@@ -111,7 +112,7 @@ function SubTaskList({
     if (!newTitle.trim()) return;
     setSaving(true);
     const sub: SubTask = {
-      id: "sub_" + Math.random().toString(36).substr(2, 8),
+      id: `sub_${crypto.randomUUID()}`,
       title: newTitle.trim(),
       completed: false,
       createdAt: new Date().toISOString(),
@@ -147,11 +148,12 @@ function SubTaskList({
     try {
       const existingTitles = subTasks.map((s) => `- ${s.title}`).join("\n");
       const text = await geminiGenerate(
-        `Given these existing sub-tasks for a software development task:\n${existingTitles || "(none yet)"}\n\nSuggest 5 concise, actionable sub-tasks (each under 8 words). Return ONLY a plain list, one per line, no numbers or bullets.`
+        `Given these existing sub-tasks for a software development task:\n${existingTitles || "(none yet)"}\n\nSuggest 5 concise, actionable sub-tasks (each under 8 words). Return ONLY a plain list, one per line, no numbers or bullets.`,
+        token
       );
       const suggestions = text.split("\n").filter((l) => l.trim()).slice(0, 5);
       const newSubs: SubTask[] = suggestions.map((title) => ({
-        id: "sub_" + Math.random().toString(36).substr(2, 8),
+        id: `sub_${crypto.randomUUID()}`,
         title: title.replace(/^[-*•]\s*/, "").trim(),
         completed: false,
         createdAt: new Date().toISOString(),
@@ -366,9 +368,11 @@ function CommentItem({
         <div
           className="text-sm text-[#525252] prose prose-sm max-w-none"
           dangerouslySetInnerHTML={{
-            __html: comment.content.replace(
-              /@(\w+)/g,
-              "<span class='text-[#0038BC] font-medium'>@$1</span>"
+            __html: DOMPurify.sanitize(
+              DOMPurify.sanitize(comment.content).replace(
+                /@(\w+)/g,
+                "<span class='text-[#0038BC] font-medium'>@$1</span>"
+              )
             ),
           }}
         />
@@ -479,7 +483,8 @@ Task title: "${task.title}"
 Category: ${task.category}
 Priority: ${task.priority}
 
-Include: what needs to be done, acceptance criteria, any important notes. 2-3 paragraphs, plain text.`
+Include: what needs to be done, acceptance criteria, any important notes. 2-3 paragraphs, plain text.`,
+        token
       );
       setDescDraft(text);
     } catch (e: any) {
@@ -673,7 +678,13 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                         setDescDraft(task.richTextDesc || "");
                         setEditingDesc(true);
                         setAiDescGenerating(true);
-                        try { const t = await geminiGenerate(`Write a task description for: "${task.title}" (${task.category}, ${task.priority} priority). 2 paragraphs, plain text.`); setDescDraft(t); } catch { }
+                        try {
+                          const t = await geminiGenerate(
+                            `Write a task description for: "${task.title}" (${task.category}, ${task.priority} priority). 2 paragraphs, plain text.`,
+                            token
+                          );
+                          setDescDraft(t);
+                        } catch { }
                         setAiDescGenerating(false);
                       }}
                       className="flex items-center gap-1 text-xs text-[#EF8F00] font-medium px-2 py-1 bg-[#fef3dc] hover:bg-[#fde8b0] rounded-lg transition-colors"
@@ -712,7 +723,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
             ) : task.richTextDesc ? (
               <div
                 className="prose prose-sm max-w-none text-[#525252]"
-                dangerouslySetInnerHTML={{ __html: task.richTextDesc }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(task.richTextDesc) }}
               />
             ) : (
               <button
@@ -725,7 +736,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
           </div>
 
           {/* Sub-tasks */}
-          <SubTaskList subTasks={subTasks} onUpdate={saveSubTasks} />
+          <SubTaskList subTasks={subTasks} onUpdate={saveSubTasks} token={token} />
 
           {/* Time tracking */}
           <div className="bg-white border border-[#E8E8E8] rounded-xl p-4">

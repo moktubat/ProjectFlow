@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import crypto from "crypto";
@@ -10,7 +11,7 @@ import bcrypt from "bcrypt";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { createServer as createViteServer } from "vite";
-import { dbStore } from "./server/db.js";
+import { dbStore, waitForDbReady } from "./server/db.js";
 import { Role, UserStatus } from "./src/types/index.js";
 import {
   uploadToCloudinary,
@@ -30,7 +31,7 @@ const SETUP_TOKEN = process.env.SETUP_TOKEN;
 // CORS allowlist — comma-separated origins in env, falls back to APP_URL.
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.APP_URL || "http://localhost:3000")
   .split(",")
-  .map((s) => s.trim())
+  .map((s) => s.trim().replace(/\/+$/, ""))
   .filter(Boolean);
 
 // ─── Password hashing ──────────────────────────────────────────────────────
@@ -39,9 +40,6 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  // Backward-compat: detect legacy unsalted-SHA256 hashes (64 hex chars,
-  // no bcrypt "$2" prefix) so existing users aren't locked out. On a
-  // successful legacy match we transparently upgrade them to bcrypt.
   const isLegacySha256 = /^[a-f0-9]{64}$/i.test(stored);
   if (isLegacySha256) {
     const legacyHash = crypto.createHash("sha256").update(password).digest("hex");
@@ -51,9 +49,6 @@ async function verifyPassword(password: string, stored: string): Promise<boolean
 }
 
 // ─── Session tokens ────────────────────────────────────────────────────────
-// Sessions are opaque, cryptographically random tokens mapped server-side to
-// a userId + expiry. The token itself is NEVER the user's database id, so it
-// can't be guessed/enumerated, and it expires.
 function generateSessionToken(): string {
   return crypto.randomBytes(32).toString("hex");
 }
@@ -82,13 +77,16 @@ function csvField(value: string): string {
 }
 
 async function startServer() {
+  // Wait for Mongo (if configured) before accepting any traffic, so early
+  // requests can't silently fall through to the local JSON fallback store.
+  await waitForDbReady();
+
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(
     cors({
       origin: (origin, callback) => {
-        // Allow same-origin/non-browser requests (no Origin header) through.
         if (!origin || ALLOWED_ORIGINS.includes(origin)) {
           callback(null, true);
         } else {
@@ -101,7 +99,6 @@ async function startServer() {
 
   app.use(express.json({ limit: "15mb" }));
 
-  // Generic API rate limiter — protects every endpoint from basic abuse.
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 600,
@@ -110,7 +107,6 @@ async function startServer() {
   });
   app.use("/api", apiLimiter);
 
-  // Tighter limiter specifically for auth endpoints (brute-force protection).
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 10,
@@ -157,7 +153,6 @@ async function startServer() {
 
   // --- API ROUTES FIRST ---
 
-  // User Management Authentication
   app.post("/api/auth/register", authLimiter, async (req, res) => {
     const { name, username, email, password, isInvitation, inviteToken, role, teamId } = req.body;
     if (!name || !username || !email || !password) {
@@ -175,9 +170,6 @@ async function startServer() {
       return;
     }
 
-    // Resolve invitation, if one was supplied — this is the authoritative
-    // source of role/team/auto-approval, NOT the isInvitation/role/teamId
-    // fields a client could otherwise set unchecked.
     let resolvedRole: Role | undefined;
     let resolvedTeamId: string | undefined;
     let resolvedAutoApprove = false;
@@ -194,8 +186,6 @@ async function startServer() {
       resolvedAutoApprove = true;
     }
 
-    // Bootstrap-only path: no users exist yet AND a valid SETUP_TOKEN was
-    // supplied. This replaces the old implicit "first user = SUPER_ADMIN".
     const existingUsersCount = (await dbStore.getUsers()).length;
     let bootstrapSuperAdmin = false;
     if (existingUsersCount === 0) {
@@ -250,8 +240,6 @@ async function startServer() {
     }
 
     const user = await dbStore.getUserByUsernameOrEmail(usernameOrEmail);
-    // Always run a hash comparison even on a missing user, to avoid leaking
-    // via response-time whether an account exists (basic timing-attack hygiene).
     const compareTarget = (user as any)?.passwordHash ?? "$2b$12$invalidinvalidinvalidinvalidinvalidinv";
     const passwordOk = await verifyPassword(password, compareTarget);
 
@@ -265,8 +253,6 @@ async function startServer() {
       return;
     }
 
-    // Transparent upgrade: if this user still has a legacy SHA-256 hash,
-    // re-hash with bcrypt now that we know the plaintext password is correct.
     if (/^[a-f0-9]{64}$/i.test((user as any).passwordHash)) {
       const upgraded = await hashPassword(password);
       await dbStore.updateUserPasswordHash?.(user.id, upgraded);
@@ -293,7 +279,6 @@ async function startServer() {
     res.json({ user: (req as any).user });
   });
 
-  // Approved users list and system users panel for Admins
   app.get("/api/users", authenticateUser, async (req, res) => {
     const users = await dbStore.getUsers();
     res.json(users.map(u => ({
@@ -331,20 +316,24 @@ async function startServer() {
     );
 
     if (updated.email) {
-      await deliverFormattedNotification({
-        recipientName: updated.name,
-        recipientEmail: updated.email,
-        subject: `Workspace Profile Update: ${status}`,
-        heading: `Account Status Update`,
-        message: `Your ProjectFlow portal account registration status has been updated to "${status}" by workspace moderator ${caller.name}.`,
-        actionLabel: "Access Workspace Dashboard",
-        actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
-        metaDetails: [
-          { label: "Account Username", value: updated.username },
-          { label: "Profile Status", value: updated.status },
-          { label: "Assigned Work Role", value: updated.role }
-        ]
-      });
+      try {
+        await deliverFormattedNotification({
+          recipientName: updated.name,
+          recipientEmail: updated.email,
+          subject: `Workspace Profile Update: ${status}`,
+          heading: `Account Status Update`,
+          message: `Your ProjectFlow portal account registration status has been updated to "${status}" by workspace moderator ${caller.name}.`,
+          actionLabel: "Access Workspace Dashboard",
+          actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
+          metaDetails: [
+            { label: "Account Username", value: updated.username },
+            { label: "Profile Status", value: updated.status },
+            { label: "Assigned Work Role", value: updated.role }
+          ]
+        });
+      } catch (e) {
+        console.error("[EMAIL] status-update notification failed:", e);
+      }
     }
 
     res.json({ success: true, user: updated });
@@ -352,8 +341,6 @@ async function startServer() {
 
   app.put("/api/users/:id/details", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
-    // Only managers/admins can change OTHER users' role/team. A user editing
-    // their own record here would previously have been allowed implicitly.
     if (!isManagerRole(caller.role) && caller.id !== req.params.id) {
       res.status(403).json({ error: "You don't have permission to edit this user." });
       return;
@@ -400,19 +387,23 @@ async function startServer() {
     );
 
     if (updated.email) {
-      await deliverFormattedNotification({
-        recipientName: updated.name,
-        recipientEmail: updated.email,
-        subject: `Workspace Promotion: ${role}`,
-        heading: `Assigned Role Elevation`,
-        message: `Your ProjectFlow authority has been elevated to "${role}" by administrator ${caller.name}.`,
-        actionLabel: "Launch Developer Console",
-        actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
-        metaDetails: [
-          { label: "Designated Role", value: updated.role },
-          { label: "Promotion Date", value: new Date().toLocaleDateString() }
-        ]
-      });
+      try {
+        await deliverFormattedNotification({
+          recipientName: updated.name,
+          recipientEmail: updated.email,
+          subject: `Workspace Promotion: ${role}`,
+          heading: `Assigned Role Elevation`,
+          message: `Your ProjectFlow authority has been elevated to "${role}" by administrator ${caller.name}.`,
+          actionLabel: "Launch Developer Console",
+          actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
+          metaDetails: [
+            { label: "Designated Role", value: updated.role },
+            { label: "Promotion Date", value: new Date().toLocaleDateString() }
+          ]
+        });
+      } catch (e) {
+        console.error("[EMAIL] role-update notification failed:", e);
+      }
     }
 
     res.json({ success: true, user: updated });
@@ -461,20 +452,24 @@ async function startServer() {
         await dbStore.createNotification(mId, "assignment", `You have been added to the project: ${project.name}`, project.id);
         const memberUser = await dbStore.getUserById(mId);
         if (memberUser && memberUser.email) {
-          await deliverFormattedNotification({
-            recipientName: memberUser.name,
-            recipientEmail: memberUser.email,
-            subject: `Project Assignment Invitation: ${project.name}`,
-            heading: `Added to New Project Board`,
-            message: `You have been added as a core project member / engineer under the team board "${project.name}".`,
-            actionLabel: "Access Project Board",
-            actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
-            metaDetails: [
-              { label: "Project Title", value: project.name },
-              { label: "Strategic Priority", value: project.priority },
-              { label: "Target Timeline", value: `${project.startDate} to ${project.endDate}` }
-            ]
-          });
+          try {
+            await deliverFormattedNotification({
+              recipientName: memberUser.name,
+              recipientEmail: memberUser.email,
+              subject: `Project Assignment Invitation: ${project.name}`,
+              heading: `Added to New Project Board`,
+              message: `You have been added as a core project member / engineer under the team board "${project.name}".`,
+              actionLabel: "Access Project Board",
+              actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
+              metaDetails: [
+                { label: "Project Title", value: project.name },
+                { label: "Strategic Priority", value: project.priority },
+                { label: "Target Timeline", value: `${project.startDate} to ${project.endDate}` }
+              ]
+            });
+          } catch (e) {
+            console.error("[EMAIL] project-assignment notification failed:", e);
+          }
         }
       }
     }
@@ -495,8 +490,6 @@ async function startServer() {
       return;
     }
 
-    // Cloudinary cleanup if coverImageUrl changes — scoped to our own folder
-    // so a client can't trick us into deleting an arbitrary Cloudinary asset.
     if (
       req.body.coverImageUrl &&
       project.coverImageUrl &&
@@ -559,11 +552,18 @@ async function startServer() {
     });
   });
 
-  // CSV Hour Tracking Export
+  // CSV Hour Tracking Export — project-scoped, so the same membership check
+  // as every other project route applies (previously missing).
   app.get("/api/projects/:id/hours/export", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
     const project = await dbStore.getProjectById(req.params.id);
     if (!project) {
       res.status(404).json({ error: "Project not found" });
+      return;
+    }
+
+    if (!canManageProject(caller, project)) {
+      res.status(403).json({ error: "You don't have permission to export this project's hours." });
       return;
     }
 
@@ -641,7 +641,6 @@ async function startServer() {
       return;
     }
 
-    // Validate assignees reference real, approved users / existing teams.
     const cleanAssignees: { userId?: string; teamId?: string }[] = [];
     if (Array.isArray(assignees)) {
       for (const a of assignees) {
@@ -655,7 +654,6 @@ async function startServer() {
       }
     }
 
-    // Validate dependencies reference real tasks in the same project.
     let cleanDependencies: string[] = [];
     if (Array.isArray(dependencies) && dependencies.length > 0) {
       const projectTasks = await dbStore.getTasks(projectId, true);
@@ -686,21 +684,25 @@ async function startServer() {
         );
         const memberUser = await dbStore.getUserById(asn.userId);
         if (memberUser && memberUser.email) {
-          await deliverFormattedNotification({
-            recipientName: memberUser.name,
-            recipientEmail: memberUser.email,
-            subject: `New Task Assignment: ${task.title}`,
-            heading: `You Have Been Assigned a Task`,
-            message: `Hello, you have been assigned to the task "${task.title}" under project "${project.name}".`,
-            actionLabel: "View Assignment Boards",
-            actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
-            metaDetails: [
-              { label: "Task Work", value: task.title },
-              { label: "Work Category", value: task.category },
-              { label: "Specified Due Date", value: task.dueDate },
-              { label: "Target Workspace Duration", value: `${task.estimatedHours} Hours` }
-            ]
-          });
+          try {
+            await deliverFormattedNotification({
+              recipientName: memberUser.name,
+              recipientEmail: memberUser.email,
+              subject: `New Task Assignment: ${task.title}`,
+              heading: `You Have Been Assigned a Task`,
+              message: `Hello, you have been assigned to the task "${task.title}" under project "${project.name}".`,
+              actionLabel: "View Assignment Boards",
+              actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
+              metaDetails: [
+                { label: "Task Work", value: task.title },
+                { label: "Work Category", value: task.category },
+                { label: "Specified Due Date", value: task.dueDate },
+                { label: "Target Workspace Duration", value: `${task.estimatedHours} Hours` }
+              ]
+            });
+          } catch (e) {
+            console.error("[EMAIL] task-assignment notification failed:", e);
+          }
         }
       } else if (asn.teamId) {
         const users = (await dbStore.getUsers()).filter(u => u.teamId === asn.teamId);
@@ -712,20 +714,24 @@ async function startServer() {
             project.id
           );
           if (u.email) {
-            await deliverFormattedNotification({
-              recipientName: u.name,
-              recipientEmail: u.email,
-              subject: `Team Task Assigned: ${task.title}`,
-              heading: `Assigned Squad Task Alert`,
-              message: `Your professional squad has been assigned task item "${task.title}" under project board "${project.name}".`,
-              actionLabel: "Inspect Board Details",
-              actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
-              metaDetails: [
-                { label: "Task Header", value: task.title },
-                { label: "Squad Allocation", value: "Assigned Squad" },
-                { label: "Due Date", value: task.dueDate }
-              ]
-            });
+            try {
+              await deliverFormattedNotification({
+                recipientName: u.name,
+                recipientEmail: u.email,
+                subject: `Team Task Assigned: ${task.title}`,
+                heading: `Assigned Squad Task Alert`,
+                message: `Your professional squad has been assigned task item "${task.title}" under project board "${project.name}".`,
+                actionLabel: "Inspect Board Details",
+                actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
+                metaDetails: [
+                  { label: "Task Header", value: task.title },
+                  { label: "Squad Allocation", value: "Assigned Squad" },
+                  { label: "Due Date", value: task.dueDate }
+                ]
+              });
+            } catch (e) {
+              console.error("[EMAIL] team-task notification failed:", e);
+            }
           }
         }
       }
@@ -767,7 +773,6 @@ async function startServer() {
       }
     }
 
-    // Re-validate assignees/dependencies if the client is changing them.
     const patch = { ...req.body };
     if (Array.isArray(patch.assignees)) {
       const cleanAssignees: { userId?: string; teamId?: string }[] = [];
@@ -810,20 +815,24 @@ async function startServer() {
           project?.id
         );
         if (owner.email) {
-          await deliverFormattedNotification({
-            recipientName: owner.name,
-            recipientEmail: owner.email,
-            subject: `Task Finished Checklist: ${updated.title}`,
-            heading: `Task Completed Successfully`,
-            message: `Good news! Your project task listed under "${updated.title}" in project board "${project?.name}" has been completed/marked as Done.`,
-            actionLabel: "Access Workspace Board",
-            actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
-            metaDetails: [
-              { label: "Completed Task name", value: updated.title },
-              { label: "Source Project Board", value: project?.name || "Unknown project" },
-              { label: "Delivery Date", value: new Date().toLocaleDateString() }
-            ]
-          });
+          try {
+            await deliverFormattedNotification({
+              recipientName: owner.name,
+              recipientEmail: owner.email,
+              subject: `Task Finished Checklist: ${updated.title}`,
+              heading: `Task Completed Successfully`,
+              message: `Good news! Your project task listed under "${updated.title}" in project board "${project?.name}" has been completed/marked as Done.`,
+              actionLabel: "Access Workspace Board",
+              actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
+              metaDetails: [
+                { label: "Completed Task name", value: updated.title },
+                { label: "Source Project Board", value: project?.name || "Unknown project" },
+                { label: "Delivery Date", value: new Date().toLocaleDateString() }
+              ]
+            });
+          } catch (e) {
+            console.error("[EMAIL] task-completed (owner) notification failed:", e);
+          }
         }
       }
 
@@ -831,19 +840,23 @@ async function startServer() {
         if (asn.userId && asn.userId !== (owner ? owner.id : "")) {
           const assignee = await dbStore.getUserById(asn.userId);
           if (assignee && assignee.email) {
-            await deliverFormattedNotification({
-              recipientName: assignee.name,
-              recipientEmail: assignee.email,
-              subject: `Completed Task Broadcast: ${updated.title}`,
-              heading: `Assigned Task Accomplished`,
-              message: `Your assigned task item "${updated.title}" has been successfully archived as Completed.`,
-              actionLabel: "Revisit Project Dashboard",
-              actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
-              metaDetails: [
-                { label: "Closed task name", value: updated.title },
-                { label: "Parent Board", value: project?.name || "Unknown project" }
-              ]
-            });
+            try {
+              await deliverFormattedNotification({
+                recipientName: assignee.name,
+                recipientEmail: assignee.email,
+                subject: `Completed Task Broadcast: ${updated.title}`,
+                heading: `Assigned Task Accomplished`,
+                message: `Your assigned task item "${updated.title}" has been successfully archived as Completed.`,
+                actionLabel: "Revisit Project Dashboard",
+                actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
+                metaDetails: [
+                  { label: "Closed task name", value: updated.title },
+                  { label: "Parent Board", value: project?.name || "Unknown project" }
+                ]
+              });
+            } catch (e) {
+              console.error("[EMAIL] task-completed (assignee) notification failed:", e);
+            }
           }
         }
       }
@@ -1034,6 +1047,12 @@ async function startServer() {
       return;
     }
 
+    // Clamp usedLimit to a sane non-negative integer; 0 means unlimited.
+    const safeUsedLimit =
+      typeof usedLimit === "number" && Number.isFinite(usedLimit) && usedLimit >= 0
+        ? Math.floor(usedLimit)
+        : 1;
+
     const id = "inv_" + crypto.randomBytes(9).toString("hex");
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -1045,7 +1064,7 @@ async function startServer() {
       role,
       teamId: teamId || undefined,
       teamName: teamName || undefined,
-      usedLimit: typeof usedLimit === "number" ? usedLimit : 1,
+      usedLimit: safeUsedLimit,
       plan: plan || "Free",
       expiresAt,
     } as any);
@@ -1118,9 +1137,6 @@ async function startServer() {
       return;
     }
 
-    // Basic allowlist: cover/avatar-style uploads must be an image; generic
-    // "file" attachments may also be common document types. This blocks
-    // uploading executable/HTML/SVG (XSS-capable) content disguised as files.
     const isImage = ALLOWED_IMAGE_EXT.test(filename);
     const isDoc = ALLOWED_DOC_EXT.test(filename);
     if (kind === "cover" && !isImage) {
@@ -1149,7 +1165,6 @@ async function startServer() {
       res.status(400).json({ error: "url is mandatory to clean up." });
       return;
     }
-    // Only allow deleting assets inside our own managed folder.
     if (!url.includes(`/${CLOUDINARY_FOLDER}/`)) {
       res.status(400).json({ error: "URL is not a managed ProjectFlow asset." });
       return;

@@ -18,6 +18,7 @@ import {
   ArrowLeft, TrendingUp, Clock, Download, Settings, Link,
   Copy, Check, AlertCircle, Pencil, X, Sparkles, ImageIcon, Save,
 } from "lucide-react";
+import DOMPurify from "dompurify";
 
 const SEL = "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:border-[#0038BC] focus:ring-2 focus:ring-[#0038BC]/10";
 
@@ -82,18 +83,19 @@ function InlineEditText({
 }
 
 // ─── Gemini AI description generator ─────────────────────────────────────────
-async function generateWithGemini(prompt: string): Promise<string> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${(import.meta as any).env?.VITE_GEMINI_API_KEY || ""}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-    }
-  );
-  if (!res.ok) throw new Error("Gemini API error: " + res.status);
+async function generateWithGemini(prompt: string, token: string | null): Promise<string> {
+  if (!token) throw new Error("You must be signed in to use AI generation.");
+  const res = await fetch("/api/ai/generate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ prompt }),
+  });
   const data = await res.json();
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  if (!res.ok) throw new Error(data.error || `AI generation failed (${res.status}).`);
+  return data.text ?? "";
 }
 
 export function ProjectDetailsView({ projectId }: { projectId: string }) {
@@ -230,7 +232,8 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
         `Write a professional project description for a software project management tool. 
 Project name: "${project.name}"
 Additional context: ${aiPrompt}
-Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Use plain text, no markdown.`
+Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Use plain text, no markdown.`,
+        token
       );
       setDescDraft(text);
       setShowAiPrompt(false);
@@ -470,7 +473,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
                     {project.richTextDescription ? (
                       <div
                         className="prose prose-sm max-w-none text-[#525252]"
-                        dangerouslySetInnerHTML={{ __html: project.richTextDescription }}
+                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(project.richTextDescription) }}
                       />
                     ) : (
                       <button

@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { useUIStore } from "./store/ui-store.js";
+import { installFetchInterceptor } from "./lib/fetch-interceptor.js";
 import { Sidebar } from "./components/layout/Sidebar.js";
 import { Navbar } from "./components/layout/Navbar.js";
 import { LoginView } from "./components/views/LoginView.js";
@@ -15,6 +16,8 @@ import { NotificationsView } from "./components/views/NotificationsView.js";
 import TrashBinView from "./components/views/TrashBinView.js";
 import { ToastNotificationManager } from "./components/layout/ToastNotificationManager.js";
 
+installFetchInterceptor();
+
 export default function App() {
   const token = useUIStore((s) => s.token);
   const currentPath = useUIStore((s) => s.currentPath);
@@ -23,12 +26,15 @@ export default function App() {
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
 
   useEffect(() => {
-    const saved = localStorage.getItem("pf_session_token");
+    const saved = localStorage.getItem("projectflow_token");
     if (saved) {
       fetch("/api/auth/session", { headers: { Authorization: `Bearer ${saved}` } })
         .then((r) => (r.ok ? r.json() : Promise.reject()))
         .then((d) => setSession(d.user, saved))
-        .catch(() => localStorage.removeItem("pf_session_token"));
+        .catch(() => {
+          localStorage.removeItem("projectflow_token");
+          localStorage.removeItem("projectflow_user");
+        });
     }
   }, []);
 
