@@ -10,23 +10,39 @@ import crypto from "crypto";
 import bcrypt from "bcrypt";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import helmet from "helmet";
 import { createServer as createViteServer } from "vite";
 import { dbStore, waitForDbReady } from "./server/db.js";
 import { Role, UserStatus } from "./src/types/index.js";
 import {
   uploadToCloudinary,
   deleteFromCloudinary,
-  deliverFormattedNotification
+  deliverFormattedNotification,
+  validateUpload,
 } from "./server/integrations.js";
+
+// ─── Startup environment guard ────────
+
+const REQUIRED_ENV_VARS = ["APP_URL"] as const;
+for (const key of REQUIRED_ENV_VARS) {
+  if (!process.env[key]) {
+    console.error(`[FATAL] Missing required environment variable: ${key}. Exiting.`);
+    process.exit(1);
+  }
+}
 
 const BCRYPT_ROUNDS = 12;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const CLOUDINARY_FOLDER = "projectflow_workspace";
 
-// One-time bootstrap guard: the very first SUPER_ADMIN account must be created
-// with this token present, so an empty users collection can never be silently
-// claimed by whoever happens to register first in production.
+// SETUP_TOKEN guard.
 const SETUP_TOKEN = process.env.SETUP_TOKEN;
+if (!SETUP_TOKEN) {
+  console.warn(
+    "[WARN] SETUP_TOKEN is not set. Initial workspace bootstrap is DISABLED until this " +
+    "variable is defined. Set SETUP_TOKEN=<secure-random-value> in your .env file."
+  );
+}
 
 // CORS allowlist — comma-separated origins in env, falls back to APP_URL.
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.APP_URL || "http://localhost:3000")
@@ -34,7 +50,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.APP_URL || "
   .map((s) => s.trim().replace(/\/+$/, ""))
   .filter(Boolean);
 
-// ─── Password hashing ──────────────────────────────────────────────────────
+// ─── Password hashing ──────
 async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, BCRYPT_ROUNDS);
 }
@@ -42,13 +58,15 @@ async function hashPassword(password: string): Promise<string> {
 async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const isLegacySha256 = /^[a-f0-9]{64}$/i.test(stored);
   if (isLegacySha256) {
-    const legacyHash = crypto.createHash("sha256").update(password).digest("hex");
-    return legacyHash === stored;
+    const legacyHash = crypto.createHash("sha256").update(password).digest();
+    const storedBuf = Buffer.from(stored, "hex");
+    if (legacyHash.length !== storedBuf.length) return false;
+    return crypto.timingSafeEqual(legacyHash, storedBuf);
   }
   return bcrypt.compare(password, stored);
 }
 
-// ─── Session tokens ────────────────────────────────────────────────────────
+// ─── Session tokens ─────
 function generateSessionToken(): string {
   return crypto.randomBytes(32).toString("hex");
 }
@@ -77,12 +95,18 @@ function csvField(value: string): string {
 }
 
 async function startServer() {
-  // Wait for Mongo (if configured) before accepting any traffic, so early
-  // requests can't silently fall through to the local JSON fallback store.
   await waitForDbReady();
 
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+
+  // Add Helmet for security headers (X-Content-Type-Options,
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+    })
+  );
 
   app.use(
     cors({
@@ -97,8 +121,16 @@ async function startServer() {
     })
   );
 
-  app.use(express.json({ limit: "15mb" }));
+  // Separate body-size limits.
+  app.use((req, res, next) => {
+    if (req.path === "/api/cloudinary/upload") {
+      express.json({ limit: "15mb" })(req, res, next);
+    } else {
+      express.json({ limit: "256kb" })(req, res, next);
+    }
+  });
 
+  // General API rate limiter
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 600,
@@ -107,6 +139,7 @@ async function startServer() {
   });
   app.use("/api", apiLimiter);
 
+  // Tight limiter for auth endpoints
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 10,
@@ -115,7 +148,23 @@ async function startServer() {
     message: { error: "Too many attempts. Please try again later." },
   });
 
-  // Middleware to authenticate user from a session token (NOT a raw user id).
+  const aiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "AI generation rate limit reached. Please try again later." },
+  });
+  
+  const inviteValidateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many validation attempts. Please try again later." },
+  });
+
+  // ─── Auth middleware ──────
   const authenticateUser = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -143,16 +192,24 @@ async function startServer() {
     next();
   };
 
-  // Helper: does the caller own/belong to/administer this project?
   const canManageProject = (caller: any, project: any): boolean => {
+    if (isManagerRole(caller.role)) return true;
+    if (project.ownerId === caller.id) return true;
+    return false;
+  };
+
+  // Separate read-access check (member OR manager).
+  // Used for read-only operations where members should be able to view data.
+  const isMemberOrManager = (caller: any, project: any): boolean => {
     if (isManagerRole(caller.role)) return true;
     if (project.ownerId === caller.id) return true;
     if (Array.isArray(project.members) && project.members.includes(caller.id)) return true;
     return false;
   };
 
-  // --- API ROUTES FIRST ---
+  // --- API ROUTES ---
 
+  // ─── Auth ─────
   app.post("/api/auth/register", authLimiter, async (req, res) => {
     const { name, username, email, password, isInvitation, inviteToken, role, teamId } = req.body;
     if (!name || !username || !email || !password) {
@@ -189,7 +246,14 @@ async function startServer() {
     const existingUsersCount = (await dbStore.getUsers()).length;
     let bootstrapSuperAdmin = false;
     if (existingUsersCount === 0) {
-      if (!SETUP_TOKEN || req.body.setupToken !== SETUP_TOKEN) {
+      const providedToken = typeof req.body.setupToken === "string" ? req.body.setupToken : "";
+      const expectedToken = SETUP_TOKEN ?? "";
+      const tokensMatch =
+        expectedToken.length > 0 &&
+        providedToken.length === expectedToken.length &&
+        crypto.timingSafeEqual(Buffer.from(providedToken), Buffer.from(expectedToken));
+
+      if (!tokensMatch) {
         res.status(403).json({
           error: "Initial workspace setup requires a valid setup token. Contact your administrator.",
         });
@@ -227,8 +291,8 @@ async function startServer() {
         username: user.username,
         email: user.email,
         role: user.role,
-        status: user.status
-      }
+        status: user.status,
+      },
     });
   });
 
@@ -260,11 +324,7 @@ async function startServer() {
 
     const token = await createSessionForUser(user.id);
 
-    res.json({
-      message: "Login successful.",
-      token,
-      user
-    });
+    res.json({ message: "Login successful.", token, user });
   });
 
   app.post("/api/auth/logout", async (req, res) => {
@@ -279,6 +339,7 @@ async function startServer() {
     res.json({ user: (req as any).user });
   });
 
+  // ─── Users ─────
   app.get("/api/users", authenticateUser, async (req, res) => {
     const users = await dbStore.getUsers();
     res.json(users.map(u => ({
@@ -289,7 +350,7 @@ async function startServer() {
       role: u.role,
       status: u.status,
       teamId: u.teamId,
-      createdAt: u.createdAt
+      createdAt: u.createdAt,
     })));
   });
 
@@ -328,8 +389,8 @@ async function startServer() {
           metaDetails: [
             { label: "Account Username", value: updated.username },
             { label: "Profile Status", value: updated.status },
-            { label: "Assigned Work Role", value: updated.role }
-          ]
+            { label: "Assigned Work Role", value: updated.role },
+          ],
         });
       } catch (e) {
         console.error("[EMAIL] status-update notification failed:", e);
@@ -398,8 +459,8 @@ async function startServer() {
           actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
           metaDetails: [
             { label: "Designated Role", value: updated.role },
-            { label: "Promotion Date", value: new Date().toLocaleDateString() }
-          ]
+            { label: "Promotion Date", value: new Date().toLocaleDateString() },
+          ],
         });
       } catch (e) {
         console.error("[EMAIL] role-update notification failed:", e);
@@ -409,7 +470,7 @@ async function startServer() {
     res.json({ success: true, user: updated });
   });
 
-  // --- PROJECTS ENDPOINTS ---
+  // ─── Projects ──────
   app.get("/api/projects", authenticateUser, async (req, res) => {
     const projects = await dbStore.getProjects();
     res.json(projects);
@@ -442,7 +503,7 @@ async function startServer() {
       coverImageUrl,
       ownerId: caller.id,
       tags: tags || [],
-      members: members || [caller.id]
+      members: members || [caller.id],
     });
 
     await dbStore.createActivity(project.id, caller.id, caller.name, "project_created", `Created project: "${project.name}"`);
@@ -464,8 +525,8 @@ async function startServer() {
               metaDetails: [
                 { label: "Project Title", value: project.name },
                 { label: "Strategic Priority", value: project.priority },
-                { label: "Target Timeline", value: `${project.startDate} to ${project.endDate}` }
-              ]
+                { label: "Target Timeline", value: `${project.startDate} to ${project.endDate}` },
+              ],
             });
           } catch (e) {
             console.error("[EMAIL] project-assignment notification failed:", e);
@@ -508,7 +569,6 @@ async function startServer() {
 
   app.delete("/api/projects/:id", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
-
     const project = await dbStore.getProjectById(req.params.id);
     if (!project) {
       res.status(404).json({ error: "Project not found" });
@@ -542,18 +602,15 @@ async function startServer() {
       u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
     );
 
-    const filteredTeams = teams.filter(t =>
-      t.name.toLowerCase().includes(q)
-    );
+    const filteredTeams = teams.filter(t => t.name.toLowerCase().includes(q));
 
     res.json({
       users: filteredUsers.map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email })),
-      teams: filteredTeams.map(t => ({ id: t.id, name: t.name, description: t.description }))
+      teams: filteredTeams.map(t => ({ id: t.id, name: t.name, description: t.description })),
     });
   });
 
-  // CSV Hour Tracking Export — project-scoped, so the same membership check
-  // as every other project route applies (previously missing).
+  // CSV Hour Tracking Export
   app.get("/api/projects/:id/hours/export", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
     const project = await dbStore.getProjectById(req.params.id);
@@ -594,19 +651,21 @@ async function startServer() {
     res.status(200).send(csvContent);
   });
 
-  // --- TASKS ENDPOINTS ---
+  // ─── Tasks ───────────────────────────────────────────────────────────────────
   app.get("/api/tasks", authenticateUser, async (req, res) => {
     const { projectId } = req.query;
     const tasks = await dbStore.getTasks(projectId ? String(projectId) : undefined);
 
-    const enriched = await Promise.all(tasks.map(async t => {
-      const proj = await dbStore.getProjectById(t.projectId);
-      return {
-        ...t,
-        projectName: proj ? proj.name : "Unknown Project"
-      };
-    }));
-    res.json(enriched);
+    const projectIds = [...new Set(tasks.map(t => t.projectId))];
+    const projectMap: Record<string, string> = {};
+    await Promise.all(
+      projectIds.map(async id => {
+        const proj = await dbStore.getProjectById(id);
+        projectMap[id] = proj ? proj.name : "Unknown Project";
+      })
+    );
+
+    res.json(tasks.map(t => ({ ...t, projectName: projectMap[t.projectId] ?? "Unknown Project" })));
   });
 
   app.get("/api/tasks/:id", authenticateUser, async (req, res) => {
@@ -616,10 +675,7 @@ async function startServer() {
       return;
     }
     const proj = await dbStore.getProjectById(task.projectId);
-    res.json({
-      ...task,
-      projectName: proj ? proj.name : "Unknown Project"
-    });
+    res.json({ ...task, projectName: proj ? proj.name : "Unknown Project" });
   });
 
   app.post("/api/tasks", authenticateUser, async (req, res) => {
@@ -671,8 +727,10 @@ async function startServer() {
       dueDate,
       estimatedHours: Number(estimatedHours) || 0,
       assignees: cleanAssignees,
-      dependencies: cleanDependencies
+      dependencies: cleanDependencies,
     });
+
+    const allUsers = await dbStore.getUsers();
 
     for (const asn of task.assignees) {
       if (asn.userId) {
@@ -682,7 +740,7 @@ async function startServer() {
           `You have been assigned to task: "${task.title}" in project "${project.name}"`,
           project.id
         );
-        const memberUser = await dbStore.getUserById(asn.userId);
+        const memberUser = allUsers.find(u => u.id === asn.userId);
         if (memberUser && memberUser.email) {
           try {
             await deliverFormattedNotification({
@@ -697,16 +755,16 @@ async function startServer() {
                 { label: "Task Work", value: task.title },
                 { label: "Work Category", value: task.category },
                 { label: "Specified Due Date", value: task.dueDate },
-                { label: "Target Workspace Duration", value: `${task.estimatedHours} Hours` }
-              ]
+                { label: "Target Workspace Duration", value: `${task.estimatedHours} Hours` },
+              ],
             });
           } catch (e) {
             console.error("[EMAIL] task-assignment notification failed:", e);
           }
         }
       } else if (asn.teamId) {
-        const users = (await dbStore.getUsers()).filter(u => u.teamId === asn.teamId);
-        for (const u of users) {
+        const teamMembers = allUsers.filter(u => u.teamId === asn.teamId);
+        for (const u of teamMembers) {
           await dbStore.createNotification(
             u.id,
             "assignment",
@@ -726,8 +784,8 @@ async function startServer() {
                 metaDetails: [
                   { label: "Task Header", value: task.title },
                   { label: "Squad Allocation", value: "Assigned Squad" },
-                  { label: "Due Date", value: task.dueDate }
-                ]
+                  { label: "Due Date", value: task.dueDate },
+                ],
               });
             } catch (e) {
               console.error("[EMAIL] team-task notification failed:", e);
@@ -766,7 +824,7 @@ async function startServer() {
         );
         if (incompleteDeps.length > 0) {
           res.status(400).json({
-            error: `Cannot set to Done. Blocked by unfinished dependencies: ${incompleteDeps.map(t => `"${t.title}"`).join(", ")}`
+            error: `Cannot set to Done. Blocked by unfinished dependencies: ${incompleteDeps.map(t => `"${t.title}"`).join(", ")}`,
           });
           return;
         }
@@ -827,8 +885,8 @@ async function startServer() {
               metaDetails: [
                 { label: "Completed Task name", value: updated.title },
                 { label: "Source Project Board", value: project?.name || "Unknown project" },
-                { label: "Delivery Date", value: new Date().toLocaleDateString() }
-              ]
+                { label: "Delivery Date", value: new Date().toLocaleDateString() },
+              ],
             });
           } catch (e) {
             console.error("[EMAIL] task-completed (owner) notification failed:", e);
@@ -851,8 +909,8 @@ async function startServer() {
                 actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
                 metaDetails: [
                   { label: "Closed task name", value: updated.title },
-                  { label: "Parent Board", value: project?.name || "Unknown project" }
-                ]
+                  { label: "Parent Board", value: project?.name || "Unknown project" },
+                ],
               });
             } catch (e) {
               console.error("[EMAIL] task-completed (assignee) notification failed:", e);
@@ -903,13 +961,13 @@ async function startServer() {
       hours: Number(hours),
       note: note || "",
       startTime,
-      endTime
+      endTime,
     });
 
     res.status(201).json({ success: true, log });
   });
 
-  // --- COMMENTS ENDPOINTS ---
+  // ─── Comments ─────
   app.get("/api/comments", authenticateUser, async (req, res) => {
     const { taskId } = req.query;
     if (!taskId) {
@@ -932,14 +990,13 @@ async function startServer() {
 
     const taskObj = await dbStore.getTaskById(taskId);
     if (taskObj) {
-      const strippedContent = content.replace(/<[^>]*>/g, '').substring(0, 60);
+      const strippedContent = content.replace(/<[^>]*>/g, "").substring(0, 60);
       await dbStore.createActivity(taskObj.projectId, caller.id, caller.name, "comment_added", `Commented on task "${taskObj.title}": "${strippedContent}..."`);
     }
 
     res.status(201).json(comment);
   });
 
-  // Edit a comment — only the original author may edit their own comment.
   app.put("/api/comments/:id", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
     const { content } = req.body;
@@ -962,15 +1019,13 @@ async function startServer() {
     res.json(updated);
   });
 
-  // --- TEAMS ENDPOINTS ---
+  // ─── Teams ─────
   app.get("/api/teams", authenticateUser, async (req, res) => {
     const teamsList = await dbStore.getTeams();
-    const resolvedTeams = await Promise.all(teamsList.map(async t => {
-      const currentMembers = (await dbStore.getUsers()).filter(u => u.teamId === t.id);
-      return {
-        ...t,
-        membersCount: currentMembers.length
-      };
+    const allUsers = await dbStore.getUsers();
+    const resolvedTeams = teamsList.map(t => ({
+      ...t,
+      membersCount: allUsers.filter(u => u.teamId === t.id).length,
     }));
     res.json(resolvedTeams);
   });
@@ -1024,7 +1079,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // --- INVITATIONS ENDPOINTS ---
+  // ─── Invitations ──────
   app.get("/api/invitations", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
     if (!isManagerRole(caller.role)) {
@@ -1047,7 +1102,6 @@ async function startServer() {
       return;
     }
 
-    // Clamp usedLimit to a sane non-negative integer; 0 means unlimited.
     const safeUsedLimit =
       typeof usedLimit === "number" && Number.isFinite(usedLimit) && usedLimit >= 0
         ? Math.floor(usedLimit)
@@ -1072,8 +1126,7 @@ async function startServer() {
     res.status(201).json(invitation);
   });
 
-  // Public — used by the registration page to validate a token before signup.
-  app.get("/api/invitations/validate/:token", async (req, res) => {
+  app.get("/api/invitations/validate/:token", inviteValidateLimiter, async (req, res) => {
     const invite = await dbStore.getInvitationById(req.params.token);
     if (!invite) {
       res.status(404).json({ valid: false, error: "Invitation not found." });
@@ -1108,7 +1161,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // --- NOTIFICATIONS SERVICE ---
+  // ─── Notifications ────
   app.get("/api/notifications", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
     const list = await dbStore.getNotifications(caller.id);
@@ -1126,10 +1179,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // --- CLOUDINARY FILE UPLOAD ---
-  const ALLOWED_IMAGE_EXT = /\.(jpe?g|png|gif|webp)$/i;
-  const ALLOWED_DOC_EXT = /\.(pdf|docx?|xlsx?|pptx?|csv|txt)$/i;
-
+  // ─── Cloudinary File Upload ─────
   app.post("/api/cloudinary/upload", authenticateUser, async (req, res) => {
     const { base64Data, filename, kind } = req.body;
     if (!base64Data || !filename) {
@@ -1137,23 +1187,15 @@ async function startServer() {
       return;
     }
 
-    const isImage = ALLOWED_IMAGE_EXT.test(filename);
-    const isDoc = ALLOWED_DOC_EXT.test(filename);
-    if (kind === "cover" && !isImage) {
-      res.status(400).json({ error: "Cover images must be JPG, PNG, GIF, or WEBP." });
-      return;
-    }
-    if (!isImage && !isDoc) {
-      res.status(400).json({ error: "Unsupported file type." });
+    const validation = validateUpload(base64Data, filename, kind);
+    if (!validation.ok) {
+      res.status(400).json({ error: validation.error });
       return;
     }
 
     try {
       const result = await uploadToCloudinary(base64Data, filename, CLOUDINARY_FOLDER);
-      res.status(201).json({
-        url: result.url,
-        simulated: result.simulated
-      });
+      res.status(201).json({ url: result.url, simulated: result.simulated });
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Failed uploading file image." });
     }
@@ -1178,7 +1220,7 @@ async function startServer() {
     }
   });
 
-  // --- DIRECT FILE ATTACHMENTS & CONFIRM ---
+  // ─── File Attachments ─────
   app.post("/api/files/confirm", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
     const { projectId, name, url, category } = req.body;
@@ -1203,7 +1245,7 @@ async function startServer() {
       name,
       url,
       category: category || "Specification",
-      uploadedAt: new Date().toISOString()
+      uploadedAt: new Date().toISOString(),
     };
 
     project.files.push(fileItem);
@@ -1214,7 +1256,7 @@ async function startServer() {
     res.status(201).json(fileItem);
   });
 
-  // --- ACTIVITIES ENDPOINTS ---
+  // ─── Activities ────
   app.get("/api/projects/:id/activities", authenticateUser, async (req, res) => {
     try {
       const activities = await dbStore.getActivities(req.params.id);
@@ -1224,7 +1266,7 @@ async function startServer() {
     }
   });
 
-  // --- TRASH CAN / RECOVERY BOX ENDPOINTS ---
+  // ─── Trash ────
   app.get("/api/trash", authenticateUser, async (req, res) => {
     try {
       const projects = await dbStore.getTrashedProjects();
@@ -1315,7 +1357,7 @@ async function startServer() {
     }
   });
 
-  // Garbage Collection for Soft-deleted items older than 15 Days
+  // ─── Garbage Collection ────
   async function runTrashAutoCleanup() {
     const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
     console.log(`[GARBAGE COLLECTION] Scanning for items soft-deleted before ${fifteenDaysAgo.toISOString()}`);
@@ -1325,12 +1367,12 @@ async function startServer() {
         if (proj.deletedAt && new Date(proj.deletedAt) < fifteenDaysAgo) {
           console.log(`[GARBAGE COLLECTION] Permanently purging project "${proj.name}" (ID: ${proj.id})`);
           if (proj.coverImageUrl?.includes(`/${CLOUDINARY_FOLDER}/`)) {
-            await deleteFromCloudinary(proj.coverImageUrl).catch(e => console.error(e));
+            await deleteFromCloudinary(proj.coverImageUrl).catch(e => console.error("[GC] Cloudinary cover delete failed:", e));
           }
           if (proj.files && proj.files.length > 0) {
             for (const f of proj.files) {
               if (f.url?.includes(`/${CLOUDINARY_FOLDER}/`)) {
-                await deleteFromCloudinary(f.url).catch(e => console.error(e));
+                await deleteFromCloudinary(f.url).catch(e => console.error("[GC] Cloudinary file delete failed:", e));
               }
             }
           }
@@ -1350,11 +1392,15 @@ async function startServer() {
     }
   }
 
-  // --- AI PROXY (keeps the Gemini key server-side only) ---
-  app.post("/api/ai/generate", authenticateUser, async (req, res) => {
+  // ─── AI Proxy ────
+  app.post("/api/ai/generate", authenticateUser, aiLimiter, async (req, res) => {
     const { prompt } = req.body;
     if (!prompt || typeof prompt !== "string") {
       res.status(400).json({ error: "A prompt string is required." });
+      return;
+    }
+    if (prompt.length > 4000) {
+      res.status(400).json({ error: "Prompt must be 4000 characters or fewer." });
       return;
     }
     const apiKey = process.env.GEMINI_API_KEY;
@@ -1383,7 +1429,7 @@ async function startServer() {
     }
   });
 
-  // --- VITE MIDDLEWARE FOR DEVELOPMENT OR STATIC FOR PRODUCTION ---
+  // ─── Static / Vite ───────────────────────────────────────────────────────────
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

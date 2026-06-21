@@ -2,9 +2,9 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Global fetch interceptor — ensures 401/403 on any /api/ call
- * triggers a client-side logout, even if the call site used raw
- * fetch() instead of authFetch().
+ * Global fetch interceptor — ensures 401 on any /api/ call
+ * triggers a client-side logout. 403 is intentionally passed
+ * through so the UI can show "access denied" for valid sessions.
  *
  * Applied once at app startup via side-effect import.
  */
@@ -64,9 +64,11 @@ function interceptedFetch(
     }
 
     return originalFetch(input, init).then((res) => {
-        if (res.status === 401 || res.status === 403) {
+        // 401 = Expired/invalid token -> force logout
+        if (res.status === 401) {
             handleAuthFailure(res.status, typeof input === "string" ? input : String(input));
         }
+
         return res;
     });
 }
@@ -81,15 +83,10 @@ export function installFetchInterceptor(): void {
     window.fetch = interceptedFetch;
 }
 
-// ─── Named export for explicit use (now just delegates to global) ─────────────
-// Kept as a migration path — call sites using authFetch() keep working,
-// and can be migrated to plain fetch() over time if desired.
 
 export async function authFetch(
     url: string,
     options: RequestInit = {}
 ): Promise<Response> {
-    // The global interceptor already handles 401/403.
-    // This export exists so existing imports don't break.
     return fetch(url, options);
 }

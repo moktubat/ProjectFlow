@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { useUIStore } from "./store/ui-store.js";
 import { installFetchInterceptor } from "./lib/fetch-interceptor.js";
+import { useNotificationPolling } from "./hooks/useNotificationPolling.js";
 import { Sidebar } from "./components/layout/Sidebar.js";
 import { Navbar } from "./components/layout/Navbar.js";
 import { LoginView } from "./components/views/LoginView.js";
@@ -24,6 +25,8 @@ export default function App() {
   const setSession = useUIStore((s) => s.setSession);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
+
+  useNotificationPolling();
 
   useEffect(() => {
     const saved = localStorage.getItem("projectflow_token");

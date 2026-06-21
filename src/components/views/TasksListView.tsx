@@ -11,7 +11,7 @@ import { usePageTitle } from "../../hooks/usePageTitle.js";
 import { Button } from "../ui/Button.js";
 import { SlidePanel } from "../ui/SlidePanel.js";
 import { Input } from "../ui/Input.js";
-import { TipTapEditor } from "../editor/TipTapEditor.js";
+import { MarkdownEditor } from "../editor/MarkdownEditor.js";
 import { CheckSquare, Calendar, Clock, Filter, Plus, AlertCircle } from "lucide-react";
 
 const PRIORITY_BADGE: Record<string, string> = {
@@ -293,7 +293,7 @@ export function TasksListView() {
           {/* Rich text description — same editor as Project Details */}
           <div>
             <label className="block text-sm font-medium text-[#3D3D3D] mb-1">Description</label>
-            <TipTapEditor
+            <MarkdownEditor
               value={taskDescription}
               onChange={setTaskDescription}
               placeholder="Describe what needs to be done, acceptance criteria, links…"

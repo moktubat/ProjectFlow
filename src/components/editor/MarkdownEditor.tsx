@@ -3,14 +3,14 @@ import { Bold, Italic, Code, Link, Heading1, List, Sparkles, AlertCircle } from 
 import { useUIStore } from "../../store/ui-store.js";
 import DOMPurify from "dompurify";
 
-interface TipTapEditorProps {
+interface MarkdownEditorProps {
   value: string;
   onChange: (val: string) => void;
   placeholder?: string;
   projectId?: string;
 }
 
-export function TipTapEditor({ value, onChange, placeholder = "Write something...", projectId }: TipTapEditorProps) {
+export function MarkdownEditor({ value, onChange, placeholder = "Write something...", projectId }: MarkdownEditorProps) {
   const [isPreview, setIsPreview] = useState(false);
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");

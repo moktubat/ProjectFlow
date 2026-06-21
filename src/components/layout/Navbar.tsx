@@ -1,4 +1,3 @@
-import React, { useEffect } from "react";
 import { useUIStore } from "../../store/ui-store.js";
 import { Bell, Menu } from "lucide-react";
 
@@ -17,34 +16,8 @@ export function Navbar() {
   const user = useUIStore((s) => s.user);
   const navigate = useUIStore((s) => s.navigate);
   const notifications = useUIStore((s) => s.notifications);
-  const setNotifications = useUIStore((s) => s.setNotifications);
-  const token = useUIStore((s) => s.token);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
-
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-
-    const fetchNotifications = async () => {
-      try {
-        const res = await fetch("/api/notifications", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok && !cancelled) {
-          setNotifications(await res.json());
-        }
-      } catch { }
-    };
-
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 15000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [token]);
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
 

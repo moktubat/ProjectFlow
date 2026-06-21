@@ -4,7 +4,7 @@ import { useComments } from "../../hooks/useComments.js";
 import { useUIStore } from "../../store/ui-store.js";
 import { Button } from "../ui/Button.js";
 import { Input } from "../ui/Input.js";
-import { TipTapEditor } from "../editor/TipTapEditor.js";
+import { MarkdownEditor } from "../editor/MarkdownEditor.js";
 import { TimePicker } from "../ui/TimePicker.js";
 import { SingleDatePicker } from "../ui/DateRangePicker.js";
 import { User, Team, Task, SubTask } from "../../types/index.js";
@@ -25,9 +25,8 @@ async function geminiGenerate(prompt: string, token: string | null): Promise<str
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `AI generation failed (${res.status}).`);
-  return data.text ?? "";
+  return DOMPurify.sanitize(data.text ?? "");
 }
-
 
 // ─── Inline-editable title ────────────────────────────────────────────────────
 function EditableTitle({
@@ -358,7 +357,7 @@ function CommentItem({
 
       {editing ? (
         <div className="space-y-2">
-          <TipTapEditor value={draft} onChange={setDraft} placeholder="Edit comment…" />
+          <MarkdownEditor value={draft} onChange={setDraft} placeholder="Edit comment…" />
           <div className="flex gap-2">
             <Button size="sm" variant="primary" isLoading={saving} onClick={handleSave}>Save</Button>
             <Button size="sm" variant="outline" onClick={() => { setEditing(false); setDraft(comment.content); }}>Cancel</Button>
@@ -468,7 +467,7 @@ export function TaskDetailsView({ taskId }: { taskId: string }) {
 
   const saveDesc = async () => {
     setDescSaving(true);
-    await updateTask({ richTextDesc: descDraft }).catch((e: any) => alert(e.message));
+    await updateTask({ richTextDesc: DOMPurify.sanitize(descDraft) }).catch((e: any) => alert(e.message));
     setDescSaving(false);
     setEditingDesc(false);
     reloadTask();
@@ -594,18 +593,15 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
   // Comment editing — uses a direct API call since useComments doesn't expose edit
   const handleEditComment = async (id: string, content: string) => {
     if (!token) return;
-    // Comments API doesn't have PUT endpoint in the original code.
-    // We'll handle gracefully — show a toast if unavailable.
     try {
       const res = await fetch(`/api/comments/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content: DOMPurify.sanitize(content) }),
       });
       if (res.ok) {
         reloadComments();
       } else {
-        // Fallback: just reload (edit not yet supported by server)
         reloadComments();
       }
     } catch { reloadComments(); }
@@ -709,7 +705,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                     AI is writing…
                   </div>
                 )}
-                <TipTapEditor
+                <MarkdownEditor
                   value={descDraft}
                   onChange={setDescDraft}
                   projectId={task.projectId}
@@ -846,7 +842,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
               )}
             </div>
             <form onSubmit={handleComment} className="space-y-2">
-              <TipTapEditor
+              <MarkdownEditor
                 value={comment}
                 onChange={setComment}
                 placeholder="Add a comment… use @mentions"

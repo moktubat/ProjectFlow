@@ -7,25 +7,37 @@ import { useEffect } from "react";
 
 const BASE = "ProjectFlow";
 
-/**
- * Sets the document <title> and updates a <meta name="description"> tag.
- * Falls back gracefully if the meta tag doesn't exist yet.
- */
 export function usePageTitle(title?: string, description?: string) {
     useEffect(() => {
-        const prev = document.title;
-        document.title = title ? `${title} — ${BASE}` : BASE;
+        const newTitle = title ? `${title} — ${BASE}` : BASE;
+        const prevTitle = document.title;
+        document.title = newTitle;
 
+        let prevDesc = "";
         let metaDesc = document.querySelector<HTMLMetaElement>('meta[name="description"]');
-        const prevDesc = metaDesc?.getAttribute("content") ?? "";
-        if (metaDesc && description) {
+
+        if (description) {
+            if (!metaDesc) {
+                metaDesc = document.createElement("meta");
+                metaDesc.name = "description";
+                document.head.appendChild(metaDesc);
+            }
+
+            prevDesc = metaDesc.getAttribute("content") ?? "";
             metaDesc.setAttribute("content", description);
         }
 
         return () => {
-            document.title = prev;
-            if (metaDesc && description) {
-                metaDesc.setAttribute("content", prevDesc);
+            if (document.title === newTitle) {
+                document.title = prevTitle;
+            }
+
+            if (description && metaDesc && metaDesc.getAttribute("content") === description) {
+                if (prevDesc) {
+                    metaDesc.setAttribute("content", prevDesc);
+                } else {
+                    metaDesc.removeAttribute("content");
+                }
             }
         };
     }, [title, description]);

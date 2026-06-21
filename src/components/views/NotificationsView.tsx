@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useState } from "react";
 import { useUIStore } from "../../store/ui-store.js";
 import { Button } from "../ui/Button.js";
 import { Bell, Briefcase, BookmarkCheck, Calendar } from "lucide-react";
@@ -10,6 +10,7 @@ export function NotificationsView() {
   const navigate = useUIStore((s) => s.navigate);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Only fetches explicitly on user action (mark read), not on mount
   const fetchNotifications = async () => {
     if (!token) return;
     setIsLoading(true);
@@ -33,10 +34,8 @@ export function NotificationsView() {
   const markAllRead = async () => {
     if (!token) return;
     const res = await fetch("/api/notifications/read-all", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
-    if (res.ok) fetchNotifications();
+    if (res.ok) await fetchNotifications();
   };
-
-  useEffect(() => { fetchNotifications(); }, [token]);
 
   const unread = notifications.filter((n) => !n.isRead);
 
@@ -58,58 +57,54 @@ export function NotificationsView() {
         )}
       </div>
 
-      {isLoading ? (
-        <div className="flex justify-center py-24">
-          <div className="w-8 h-8 border-2 border-[#0038BC] border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : (
-        <div className="bg-white border border-[#E8E8E8] rounded-xl divide-y divide-[#F4F4F4] overflow-hidden">
-          {notifications.map((n) => (
-            <div
-              key={n.id}
-              className={`flex items-start gap-3.5 px-5 py-4 transition-colors ${n.isRead ? "" : "bg-[#F7F8FA]"}`}
-            >
-              {/* Icon */}
-              <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${n.type === "approval" ? "bg-[#e8edfb] text-[#0038BC]" : "bg-[#fef3dc] text-[#EF8F00]"}`}>
-                {n.type === "approval" ? <BookmarkCheck className="w-4 h-4" /> : <Briefcase className="w-4 h-4" />}
-              </div>
-
-              {/* Content */}
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm ${n.isRead ? "text-[#525252]" : "text-[#111111] font-medium"}`}>
-                  {n.message}
-                </p>
-                <p className="text-xs text-[#A0A0A0] mt-1 flex items-center gap-1">
-                  <Calendar className="w-3 h-3" />
-                  {n.createdAt?.replace("T", " ").substring(0, 16)}
-                </p>
-              </div>
-
-              {/* Action */}
-              {!n.isRead ? (
-                <Button
-                  onClick={() => markRead(n.id, n.relatedProjectId)}
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0 text-[#0038BC] hover:bg-[#e8edfb]"
-                >
-                  Mark read
-                </Button>
-              ) : (
-                <span className="text-xs text-[#A0A0A0] shrink-0 pt-1">Read</span>
-              )}
+      {/* Notifications List */}
+      <div className="bg-white border border-[#E8E8E8] rounded-xl divide-y divide-[#F4F4F4] overflow-hidden">
+        {notifications.map((n) => (
+          <div
+            key={n.id}
+            className={`flex items-start gap-3.5 px-5 py-4 transition-colors ${n.isRead ? "" : "bg-[#F7F8FA]"}`}
+          >
+            {/* Icon */}
+            <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${n.type === "approval" ? "bg-[#e8edfb] text-[#0038BC]" : "bg-[#fef3dc] text-[#EF8F00]"}`}>
+              {n.type === "approval" ? <BookmarkCheck className="w-4 h-4" /> : <Briefcase className="w-4 h-4" />}
             </div>
-          ))}
 
-          {notifications.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-              <Bell className="w-10 h-10 text-[#D0D0D0] mb-3" />
-              <p className="font-medium text-[#525252]">No notifications</p>
-              <p className="text-sm text-[#A0A0A0] mt-1">You'll be notified here when things happen.</p>
+            {/* Content */}
+            <div className="flex-1 min-w-0">
+              <p className={`text-sm ${n.isRead ? "text-[#525252]" : "text-[#111111] font-medium"}`}>
+                {n.message}
+              </p>
+              <p className="text-xs text-[#A0A0A0] mt-1 flex items-center gap-1">
+                <Calendar className="w-3 h-3" />
+                {n.createdAt?.replace("T", " ").substring(0, 16)}
+              </p>
             </div>
-          )}
-        </div>
-      )}
+
+            {/* Action */}
+            {!n.isRead ? (
+              <Button
+                onClick={() => markRead(n.id, n.relatedProjectId)}
+                variant="ghost"
+                size="sm"
+                className="shrink-0 text-[#0038BC] hover:bg-[#e8edfb]"
+                disabled={isLoading}
+              >
+                Mark read
+              </Button>
+            ) : (
+              <span className="text-xs text-[#A0A0A0] shrink-0 pt-1">Read</span>
+            )}
+          </div>
+        ))}
+
+        {notifications.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <Bell className="w-10 h-10 text-[#D0D0D0] mb-3" />
+            <p className="font-medium text-[#525252]">No notifications</p>
+            <p className="text-sm text-[#A0A0A0] mt-1">You'll be notified here when things happen.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

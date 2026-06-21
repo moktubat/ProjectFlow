@@ -9,6 +9,22 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// ─── Startup environment validation 
+const missingEnvWarnings: string[] = [];
+if (!process.env.CLOUDINARY_URL && !(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET)) {
+  missingEnvWarnings.push("CLOUDINARY_URL or (CLOUDINARY_CLOUD_NAME + CLOUDINARY_API_KEY + CLOUDINARY_API_SECRET)");
+}
+if (!process.env.RESEND_API_KEY) {
+  missingEnvWarnings.push("RESEND_API_KEY");
+}
+if (missingEnvWarnings.length > 0) {
+  console.warn(
+    "[ENV WARNING] The following optional environment variables are not set — " +
+    "affected features will run in simulation mode:\n  • " +
+    missingEnvWarnings.join("\n  • ")
+  );
+}
+
 // ─── Cloudinary ───────────────────────────────────────────────────────────────
 let isCloudinaryConfigured = false;
 
@@ -26,16 +42,10 @@ if (process.env.CLOUDINARY_URL) {
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET,
-    secure: true, // always use https
+    secure: true,
   });
   isCloudinaryConfigured = true;
   console.log("[CLOUDINARY] Configured via individual credential variables.");
-} else {
-  console.warn(
-    "[CLOUDINARY WARNING] No Cloudinary credentials found in environment. " +
-    "Set CLOUDINARY_URL  OR  CLOUDINARY_CLOUD_NAME + CLOUDINARY_API_KEY + CLOUDINARY_API_SECRET. " +
-    "File uploads will fall back to simulation mode until then."
-  );
 }
 
 // ─── Resend ───────────────────────────────────────────────────────────────────
@@ -44,19 +54,80 @@ let resendInstance: Resend | null = null;
 if (process.env.RESEND_API_KEY) {
   resendInstance = new Resend(process.env.RESEND_API_KEY);
   console.log("[RESEND] API client initialised.");
-} else {
-  console.warn(
-    "[RESEND WARNING] RESEND_API_KEY is not set. " +
-    "Email delivery will run in simulation mode (logs to console only)."
-  );
+}
+
+// ─── Allowed MIME types for upload validation ─────────────────────────────────
+
+const ALLOWED_MIME_TYPES = new Set([
+  // Images
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  // Documents
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "text/csv",
+  "text/plain",
+]);
+
+const IMAGE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+
+export function parseMimeFromDataUri(dataUri: string): string | null {
+  const match = dataUri.match(/^data:([a-zA-Z0-9][a-zA-Z0-9!#$&\-^_]+\/[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_.+]+);base64,/);
+  return match ? match[1].toLowerCase() : null;
+}
+
+export function validateUpload(
+  base64Data: string,
+  filename: string,
+  kind?: string
+): { ok: true } | { ok: false; error: string } {
+  const ALLOWED_IMAGE_EXT = /\.(jpe?g|png|gif|webp)$/i;
+  const ALLOWED_DOC_EXT = /\.(pdf|docx?|xlsx?|pptx?|csv|txt)$/i;
+
+  const isImageExt = ALLOWED_IMAGE_EXT.test(filename);
+  const isDocExt = ALLOWED_DOC_EXT.test(filename);
+
+  if (!isImageExt && !isDocExt) {
+    return { ok: false, error: "Unsupported file type." };
+  }
+  if (kind === "cover" && !isImageExt) {
+    return { ok: false, error: "Cover images must be JPG, PNG, GIF, or WEBP." };
+  }
+
+  const mime = parseMimeFromDataUri(base64Data);
+  if (mime) {
+    if (!ALLOWED_MIME_TYPES.has(mime)) {
+      return { ok: false, error: `File MIME type "${mime}" is not permitted.` };
+    }
+    if (kind === "cover" && !IMAGE_MIME_TYPES.has(mime)) {
+      return { ok: false, error: "Cover images must be an image MIME type." };
+    }
+    // Cross-check: extension says image but MIME says document (or vice-versa)
+    if (isImageExt && !IMAGE_MIME_TYPES.has(mime)) {
+      return { ok: false, error: "File extension and content type do not match." };
+    }
+    if (isDocExt && IMAGE_MIME_TYPES.has(mime)) {
+      return { ok: false, error: "File extension and content type do not match." };
+    }
+  }
+
+  return { ok: true };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Extract Cloudinary public_id and resource_type from a secure URL.
- * Handles versioned URLs (v1234567890/...) and transformation prefixes.
- */
 export function extractPublicIdFromUrl(
   url: string
 ): { public_id: string; resource_type: string } | null {
@@ -93,10 +164,6 @@ export function extractPublicIdFromUrl(
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
-/**
- * Upload a base64-encoded file (or remote URL) to Cloudinary.
- * Falls back to a placeholder URL when Cloudinary is not configured.
- */
 export async function uploadToCloudinary(
   base64Data: string,
   filename: string,
@@ -120,7 +187,6 @@ export async function uploadToCloudinary(
     const rawName = lastDot !== -1 ? filename.substring(0, lastDot) : filename;
     const publicId = rawName.replace(/[,/\\]/g, "_");
 
-
     const result = await cloudinary.uploader.upload(base64Data, {
       folder: folderName,
       public_id: publicId,
@@ -139,10 +205,6 @@ export async function uploadToCloudinary(
 
 // ─── Delete ───────────────────────────────────────────────────────────────────
 
-/**
- * Delete a Cloudinary asset by parsing its URL.
- * Silently skips non-Cloudinary URLs (e.g. Unsplash placeholder).
- */
 export async function deleteFromCloudinary(url: string): Promise<boolean> {
   const meta = extractPublicIdFromUrl(url);
   if (!meta) {
@@ -170,10 +232,6 @@ export async function deleteFromCloudinary(url: string): Promise<boolean> {
 
 // ─── Email ────────────────────────────────────────────────────────────────────
 
-/**
- * Low-level email send via Resend.
- * Falls back to a console log when RESEND_API_KEY is absent.
- */
 export async function sendEmail({
   to,
   subject,
@@ -218,12 +276,8 @@ export async function sendEmail({
   }
 }
 
-
 // ─── Formatted notification email ─────────────────────────────────────────────
 
-/**
- * Build and send a branded HTML notification email.
- */
 export async function deliverFormattedNotification({
   recipientName,
   recipientEmail,
@@ -245,6 +299,14 @@ export async function deliverFormattedNotification({
 }): Promise<boolean> {
   if (!recipientEmail) return false;
 
+  const esc = (s: string) =>
+    String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
   const metaRowsHtml =
     metaDetails && metaDetails.length > 0
       ? `<div style="background:#f1f5f9;padding:14px;border-radius:8px;margin-bottom:24px;font-size:13px;font-family:monospace;">
@@ -252,8 +314,8 @@ export async function deliverFormattedNotification({
         .map(
           (item) =>
             `<div style="margin-bottom:6px;">
-                  <strong style="color:#475569;">${item.label}:</strong>
-                  <span style="color:#0f172a;"> ${item.value}</span>
+                  <strong style="color:#475569;">${esc(item.label)}:</strong>
+                  <span style="color:#0f172a;"> ${esc(item.value)}</span>
                 </div>`
         )
         .join("")}
@@ -263,17 +325,17 @@ export async function deliverFormattedNotification({
   const actionButtonHtml =
     actionUrl && actionLabel
       ? `<div style="text-align:center;margin:28px 0;">
-          <a href="${actionUrl}"
+          <a href="${esc(actionUrl)}"
              style="background:#0d9488;color:#fff;padding:12px 24px;font-size:14px;
                     font-weight:bold;border-radius:6px;text-decoration:none;display:inline-block;">
-            ${actionLabel}
+            ${esc(actionLabel)}
           </a>
         </div>`
       : "";
 
   const html = `<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>${subject}</title></head>
+<head><meta charset="utf-8"><title>${esc(subject)}</title></head>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
              background:#f8fafc;padding:24px;margin:0;">
   <div style="max-width:580px;margin:0 auto;background:#fff;border-radius:12px;
@@ -289,10 +351,10 @@ export async function deliverFormattedNotification({
     <!-- Body -->
     <div style="padding:32px 24px;">
       <p style="font-size:15px;color:#334155;margin-top:0;">
-        Hello <strong>${recipientName}</strong>,
+        Hello <strong>${esc(recipientName)}</strong>,
       </p>
-      <h2 style="font-size:18px;color:#0f172a;font-weight:700;margin:16px 0 12px;">${heading}</h2>
-      <p style="font-size:14px;color:#475569;line-height:1.6;margin-bottom:24px;">${message}</p>
+      <h2 style="font-size:18px;color:#0f172a;font-weight:700;margin:16px 0 12px;">${esc(heading)}</h2>
+      <p style="font-size:14px;color:#475569;line-height:1.6;margin-bottom:24px;">${esc(message)}</p>
 
       ${metaRowsHtml}
       ${actionButtonHtml}
@@ -300,7 +362,7 @@ export async function deliverFormattedNotification({
       <hr style="border:none;border-top:1px solid #f1f5f9;margin:28px 0;" />
       <p style="font-size:11px;color:#94a3b8;text-align:center;margin:0;line-height:1.4;">
         You received this automated alert because you are registered on ProjectFlow.<br/>
-        © ${new Date().getFullYear()} ProjectFlow — Hosted on secure workspace server.
+        &copy; ${new Date().getFullYear()} ProjectFlow &mdash; Hosted on secure workspace server.
       </p>
     </div>
   </div>

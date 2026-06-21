@@ -8,7 +8,7 @@ import { Input } from "../ui/Input.js";
 import { SlidePanel } from "../ui/SlidePanel.js";
 import { ActivityStream } from "../ActivityStream.js";
 import { KanbanBoard } from "../kanban/KanbanBoard.js";
-import { TipTapEditor } from "../editor/TipTapEditor.js";
+import { MarkdownEditor } from "../editor/MarkdownEditor.js";
 import { TaskListBoard } from "../tasklist/TaskListBoard.js";
 import { ProjectSprintAnalytics } from "../project/ProjectSprintAnalytics.js";
 import { DateRangePicker } from "../ui/DateRangePicker.js";
@@ -95,7 +95,7 @@ async function generateWithGemini(prompt: string, token: string | null): Promise
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `AI generation failed (${res.status}).`);
-  return data.text ?? "";
+  return DOMPurify.sanitize(data.text ?? "");
 }
 
 export function ProjectDetailsView({ projectId }: { projectId: string }) {
@@ -218,7 +218,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   // ── Description editing ──
   const handleSaveDesc = async () => {
     setDescSaving(true);
-    await updateProject({ richTextDescription: descDraft });
+    await updateProject({ richTextDescription: DOMPurify.sanitize(descDraft) });
     setDescSaving(false);
     setEditingDesc(false);
   };
@@ -272,7 +272,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ projectId, title: tTitle, richTextDesc: tDesc, status: tStatus, priority: tPri, category: tCat, dueDate: tDue, estimatedHours: Number(tEst) || 0, assignees: tAsgn.map((id) => ({ userId: id })), dependencies: tDeps }),
+        body: JSON.stringify({ projectId, title: tTitle, richTextDesc: DOMPurify.sanitize(tDesc), status: tStatus, priority: tPri, category: tCat, dueDate: tDue, estimatedHours: Number(tEst) || 0, assignees: tAsgn.map((id) => ({ userId: id })), dependencies: tDeps }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
       setTaskPanel(false);
@@ -383,11 +383,6 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
 
           <div className="absolute bottom-4 left-5 right-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
             <div className="flex-1 min-w-0">
-              {/* Inline-editable date range —
-                  capped to a compact pill width so it doesn't stretch full
-                  hero-bleed; the calendar itself now renders via a portal
-                  (see DateRangePicker) so it isn't clipped by this hero's
-                  overflow-hidden / fixed height. */}
               <div className="mb-2 max-w-[220px]">
                 <DateRangePicker
                   value={{ start: project.startDate, end: project.endDate }}
@@ -520,7 +515,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
                       </div>
                     )}
 
-                    <TipTapEditor
+                    <MarkdownEditor
                       value={descDraft}
                       onChange={setDescDraft}
                       projectId={projectId}
@@ -636,7 +631,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           </div>
           <div>
             <label className="block text-xs text-[#737373] mb-1">Description</label>
-            <TipTapEditor value={tDesc} onChange={setTDesc} projectId={projectId} />
+            <MarkdownEditor value={tDesc} onChange={setTDesc} projectId={projectId} />
           </div>
           <div>
             <label className="block text-xs text-[#737373] mb-1.5">Assignees</label>

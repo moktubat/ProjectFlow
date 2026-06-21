@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Task, User, Project } from "../../types/index.js";
 import { TrendingDown, Users, BarChart4, Clock, Zap, ShieldAlert, RefreshCw } from "lucide-react";
 
@@ -41,11 +41,21 @@ export function ProjectSprintAnalytics({ tasks, users, project }: ProjectSprintA
   const burndown = useMemo(() => {
     let start = project.startDate ? new Date(project.startDate) : new Date();
     let end = project.endDate ? new Date(project.endDate) : new Date(Date.now() + 14 * 86400000);
+
     if (isNaN(start.getTime())) start = new Date();
     if (isNaN(end.getTime())) end = new Date(Date.now() + 14 * 86400000);
+
     let days = Math.ceil((end.getTime() - start.getTime()) / 86400000);
-    if (days <= 0) days = 14;
+
+    if (days < 0) {
+      [start, end] = [end, start];
+      days = Math.ceil((end.getTime() - start.getTime()) / 86400000);
+    }
+
+    if (days <= 0) days = 1;
+
     if (days > 45) days = 45;
+
     const tot = active.reduce((s, t) => s + (t.estimatedHours ?? 0), 0);
     return Array.from({ length: days + 1 }, (_, i) => {
       const date = new Date(start.getTime() + i * 86400000).toISOString().split("T")[0];

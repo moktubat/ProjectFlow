@@ -10,7 +10,7 @@ import { usePageTitle } from "../../hooks/usePageTitle.js";
 import { Button } from "../ui/Button.js";
 import { Input } from "../ui/Input.js";
 import { SlidePanel } from "../ui/SlidePanel.js";
-import { TipTapEditor } from "../editor/TipTapEditor.js";
+import { MarkdownEditor } from "../editor/MarkdownEditor.js";
 import { Project, User, UserStatus, Task } from "../../types/index.js";
 import {
   FolderKanban, Plus, Calendar, AlertCircle, Search, X,
@@ -576,7 +576,7 @@ export function ProjectsView() {
 
           <div>
             <label className="mb-1.5 block text-sm font-medium text-[#3D3D3D]">Description</label>
-            <TipTapEditor value={desc} onChange={setDesc} placeholder="Describe the project goals and scope…" />
+            <MarkdownEditor value={desc} onChange={setDesc} placeholder="Describe the project goals and scope…" />
           </div>
 
           {/* Team members */}

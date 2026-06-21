@@ -32,6 +32,16 @@ export function useDragDropBoard(
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const isDragging = useRef(false);
 
+    const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (refreshTimerRef.current) {
+                clearTimeout(refreshTimerRef.current);
+            }
+        };
+    }, []);
+
     useEffect(() => {
         if (!isDragging.current) setLocalTasks(tasks);
     }, [tasks]);
@@ -114,8 +124,12 @@ export function useDragDropBoard(
                     setErrorMsg(data.error || "Could not move task — change rolled back.");
                     setTimeout(() => setErrorMsg(null), 4000);
                 } else {
-                    // Fire-and-forget: parent refreshes side data without flicker.
-                    onTaskUpdated();
+                    if (refreshTimerRef.current) {
+                        clearTimeout(refreshTimerRef.current);
+                    }
+                    refreshTimerRef.current = setTimeout(() => {
+                        onTaskUpdated();
+                    }, 500);
                 }
             } catch {
                 setLocalTasks(tasks);

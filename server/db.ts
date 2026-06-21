@@ -14,11 +14,7 @@ dotenv.config();
 
 const STORE_PATH = path.join(process.cwd(), "server", "store.json");
 
-// Short, URL/ID-safe random suffix generator backed by crypto, replacing the
-// old Math.random().toString(36) approach (low entropy, not collision-safe,
-// and — since these IDs doubled as bearer tokens in the old auth flow —
-// guessable). Sessions/tokens use crypto.randomBytes directly; this helper
-// is just for readable, prefixed entity IDs (usr_..., proj_..., etc.).
+// Short, URL/ID-safe random suffix generator backed by crypto.
 function genId(prefix: string): string {
   return `${prefix}_${crypto.randomBytes(9).toString("hex")}`;
 }
@@ -51,7 +47,7 @@ const initialDb: DatabaseSchema = {
   notifications: [],
   activities: [],
   invitations: [],
-  sessions: []
+  sessions: [],
 };
 
 // Ensure server folder exists
@@ -64,34 +60,54 @@ function readDb(): DatabaseSchema {
   try {
     if (!fs.existsSync(STORE_PATH)) {
       fs.writeFileSync(STORE_PATH, JSON.stringify(initialDb, null, 2));
-      return initialDb;
+      return JSON.parse(JSON.stringify(initialDb)); // deep clone
     }
     const data = fs.readFileSync(STORE_PATH, "utf8");
     const parsed = JSON.parse(data);
     // Backward-compat: older store.json files won't have a `sessions` array yet.
     if (!parsed.sessions) parsed.sessions = [];
+    if (!parsed.activities) parsed.activities = [];
+    if (!parsed.invitations) parsed.invitations = [];
     return parsed;
   } catch (err) {
     console.error("Failed to read database store:", err);
-    return initialDb;
+    return JSON.parse(JSON.stringify(initialDb)); // deep clone
   }
 }
 
-function writeDb(data: DatabaseSchema) {
-  try {
-    fs.writeFileSync(STORE_PATH, JSON.stringify(data, null, 2));
-  } catch (err) {
-    console.error("Failed to write to database store:", err);
+let writeQueue: Promise<void> = Promise.resolve();
+
+function writeDb(data: DatabaseSchema): void {
+  const snapshot = JSON.stringify(data, null, 2);
+  writeQueue = writeQueue.then(async () => {
+    const tmp = STORE_PATH + ".tmp";
+    try {
+      await fs.promises.writeFile(tmp, snapshot, "utf8");
+      await fs.promises.rename(tmp, STORE_PATH);
+    } catch (err) {
+      console.error("Failed to write to database store:", err);
+      try { await fs.promises.unlink(tmp); } catch { /* ignore */ }
+    }
+  });
+}
+
+function purgeExpiredSessionsFromJson(): void {
+  const db = readDb();
+  const before = db.sessions.length;
+  db.sessions = db.sessions.filter(s => new Date(s.expiresAt) > new Date());
+  if (db.sessions.length !== before) {
+    writeDb(db);
+    console.log(`[SESSION GC] Purged ${before - db.sessions.length} expired sessions from local store.`);
   }
 }
+
+// Run the JSON session purge every hour when not using MongoDB.
+let jsonSessionPurgeInterval: ReturnType<typeof setInterval> | null = null;
 
 // ------ MONGOOSE CONFIGURATION AND FALLBACK ------
 const MONGODB_URI = process.env.MONGODB_URI;
 let isMongoConnected = false;
 
-// Exposed so server.ts can `await` full connection readiness before
-// accepting traffic, instead of relying on the isMongoConnected flag alone
-// (which previously could still be false for early in-flight requests).
 let mongoReadyPromise: Promise<void> = Promise.resolve();
 
 if (MONGODB_URI) {
@@ -105,14 +121,20 @@ if (MONGODB_URI) {
       console.error("[MONGO CONNECTION ERROR] Failed to connect to MongoDB:", err.message);
       console.log("[DATABASES] Using server/store.json local storage fallback engine.");
       isMongoConnected = false;
+      // Start the session GC loop for the JSON fallback
+      purgeExpiredSessionsFromJson();
+      jsonSessionPurgeInterval = setInterval(purgeExpiredSessionsFromJson, 60 * 60 * 1000);
     });
 } else {
   console.log("[DATABASES INFO] No MONGODB_URI environment variable detected. Running local storage fallback.");
+  // Start the session GC loop immediately for the JSON fallback
+  purgeExpiredSessionsFromJson();
+  jsonSessionPurgeInterval = setInterval(purgeExpiredSessionsFromJson, 60 * 60 * 1000);
 }
 
 export const waitForDbReady = () => mongoReadyPromise;
 
-// Custom Mongoose Schemas using custom String primary keys (custom id like usr_..., proj_...)
+// Custom Mongoose Schemas using custom String primary keys (usr_..., proj_..., etc.)
 const UserSchema = new mongoose.Schema({
   _id: { type: String, required: true },
   name: { type: String, required: true },
@@ -122,7 +144,7 @@ const UserSchema = new mongoose.Schema({
   status: { type: String, required: true },
   teamId: { type: String },
   passwordHash: { type: String, required: true },
-  createdAt: { type: String, required: true }
+  createdAt: { type: String, required: true },
 }, { versionKey: false, _id: false });
 
 const TeamSchema = new mongoose.Schema({
@@ -149,10 +171,10 @@ const ProjectSchema = new mongoose.Schema({
     name: String,
     url: String,
     category: String,
-    uploadedAt: String
+    uploadedAt: String,
   }],
   deleted: { type: Boolean, default: false },
-  deletedAt: { type: String }
+  deletedAt: { type: String },
 }, { versionKey: false, _id: false });
 
 const TaskSchema = new mongoose.Schema({
@@ -168,17 +190,17 @@ const TaskSchema = new mongoose.Schema({
   assignees: [{ userId: String, teamId: String }],
   timeLogs: [{
     id: String, userId: String, hours: Number, note: String,
-    startTime: String, endTime: String, createdAt: String
+    startTime: String, endTime: String, createdAt: String,
   }],
   subTasks: [{
     id: String,
     title: String,
     completed: { type: Boolean, default: false },
-    createdAt: String
+    createdAt: String,
   }],
   dependencies: [String],
   deleted: { type: Boolean, default: false },
-  deletedAt: { type: String }
+  deletedAt: { type: String },
 }, { versionKey: false, _id: false });
 
 const CommentSchema = new mongoose.Schema({
@@ -189,7 +211,7 @@ const CommentSchema = new mongoose.Schema({
   userRole: { type: String, required: true },
   content: { type: String, required: true },
   createdAt: { type: String, required: true },
-  editedAt: { type: String }
+  editedAt: { type: String },
 }, { versionKey: false, _id: false });
 
 const NotificationSchema = new mongoose.Schema({
@@ -199,7 +221,7 @@ const NotificationSchema = new mongoose.Schema({
   message: { type: String, required: true },
   isRead: { type: Boolean, default: false },
   relatedProjectId: { type: String },
-  createdAt: { type: String, required: true }
+  createdAt: { type: String, required: true },
 }, { versionKey: false, _id: false });
 
 const ActivitySchema = new mongoose.Schema({
@@ -209,7 +231,7 @@ const ActivitySchema = new mongoose.Schema({
   userName: { type: String, required: true },
   action: { type: String, required: true },
   details: { type: String, required: true },
-  createdAt: { type: String, required: true }
+  createdAt: { type: String, required: true },
 }, { versionKey: false, _id: false });
 
 const InvitationSchema = new mongoose.Schema({
@@ -225,16 +247,15 @@ const InvitationSchema = new mongoose.Schema({
   usedLimit: { type: Number, required: true },
   plan: { type: String, required: true },
   status: { type: String, required: true },
-  createdAt: { type: String, required: true }
+  createdAt: { type: String, required: true },
 }, { versionKey: false, _id: false });
 
-// Sessions are deliberately given a TTL index in Mongo so expired tokens are
-// automatically reaped without needing a manual cleanup job.
+// Sessions get a TTL index in Mongo so expired tokens are automatically reaped.
 const SessionSchema = new mongoose.Schema({
   _id: { type: String, required: true }, // the token itself
   userId: { type: String, required: true },
   createdAt: { type: String, required: true },
-  expiresAt: { type: Date, required: true, expires: 0 }
+  expiresAt: { type: Date, required: true, expires: 0 },
 }, { versionKey: false, _id: false });
 
 const MongoUser = mongoose.models.User || mongoose.model("User", UserSchema);
@@ -247,7 +268,7 @@ const MongoActivity = mongoose.models.Activity || mongoose.model("Activity", Act
 const MongoInvitation = mongoose.models.Invitation || mongoose.model("Invitation", InvitationSchema);
 const MongoSession = mongoose.models.Session || mongoose.model("Session", SessionSchema);
 
-// Adapter Mapper Helpers
+// Adapter mapper helpers
 function mapMongoDoc<T>(doc: any): T {
   if (!doc) return null as any;
   const obj = doc.toObject ? doc.toObject() : doc;
@@ -283,8 +304,8 @@ export const dbStore = {
       const doc = await MongoUser.findOne({
         $or: [
           { username: { $regex: new RegExp(`^${l}$`, "i") } },
-          { email: { $regex: new RegExp(`^${l}$`, "i") } }
-        ]
+          { email: { $regex: new RegExp(`^${l}$`, "i") } },
+        ],
       } as any);
       return mapMongoDoc<User>(doc);
     }
@@ -293,7 +314,6 @@ export const dbStore = {
 
   createUser: async (user: Omit<User, "id" | "createdAt"> & { passwordHash: string }): Promise<User> => {
     const id = genId("usr");
-
     const newUser = {
       _id: id,
       name: user.name,
@@ -303,7 +323,7 @@ export const dbStore = {
       status: user.status,
       teamId: user.teamId,
       passwordHash: user.passwordHash,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
     if (isMongoConnected) {
@@ -325,10 +345,7 @@ export const dbStore = {
     } else {
       const db = readDb();
       const user = db.users.find(u => u.id === id);
-      if (user) {
-        user.status = status;
-        writeDb(db);
-      }
+      if (user) { user.status = status; writeDb(db); }
       return user || null;
     }
   },
@@ -340,10 +357,7 @@ export const dbStore = {
     } else {
       const db = readDb();
       const user = db.users.find(u => u.id === id);
-      if (user) {
-        user.role = role;
-        writeDb(db);
-      }
+      if (user) { user.role = role; writeDb(db); }
       return user || null;
     }
   },
@@ -355,34 +369,22 @@ export const dbStore = {
     } else {
       const db = readDb();
       const user = db.users.find(u => u.id === id);
-      if (user) {
-        user.teamId = teamId;
-        writeDb(db);
-      }
+      if (user) { user.teamId = teamId; writeDb(db); }
       return user || null;
     }
   },
 
-  // Used by the login flow to transparently upgrade legacy SHA-256 password
-  // hashes to bcrypt once a correct plaintext password has been verified.
   updateUserPasswordHash: async (id: string, passwordHash: string): Promise<void> => {
     if (isMongoConnected) {
       await MongoUser.updateOne({ _id: id } as any, { passwordHash } as any);
     } else {
       const db = readDb();
       const user = db.users.find(u => u.id === id);
-      if (user) {
-        (user as any).passwordHash = passwordHash;
-        writeDb(db);
-      }
+      if (user) { (user as any).passwordHash = passwordHash; writeDb(db); }
     }
   },
 
   // --- SESSIONS ---
-  // Opaque bearer tokens mapped to a userId + expiry. Tokens are generated
-  // by server.ts via crypto.randomBytes — this layer only persists/looks
-  // them up, mirroring the same Mongo/local-JSON dual-mode pattern used
-  // everywhere else in this file.
   createSession: async (token: string, userId: string, expiresAt: string): Promise<void> => {
     const createdAt = new Date().toISOString();
     if (isMongoConnected) {
@@ -414,8 +416,6 @@ export const dbStore = {
     }
   },
 
-  // Invalidate every session belonging to a user — handy for "log out
-  // everywhere" flows or forced de-auth after a role/status change.
   deleteSessionsForUser: async (userId: string): Promise<void> => {
     if (isMongoConnected) {
       await MongoSession.deleteMany({ userId } as any);
@@ -447,12 +447,7 @@ export const dbStore = {
 
   createProject: async (project: Omit<Project, "id" | "files">): Promise<Project> => {
     const id = genId("proj");
-    const newProj = {
-      _id: id,
-      ...project,
-      files: [],
-      deleted: false
-    };
+    const newProj = { _id: id, ...project, files: [], deleted: false };
 
     if (isMongoConnected) {
       const created = await MongoProject.create(newProj as any);
@@ -480,7 +475,6 @@ export const dbStore = {
     }
   },
 
-  // Soft delete (moves to trash)
   deleteProject: async (id: string): Promise<boolean> => {
     const deletedAt = new Date().toISOString();
     if (isMongoConnected) {
@@ -490,22 +484,13 @@ export const dbStore = {
     } else {
       const db = readDb();
       const proj = db.projects.find(p => p.id === id);
-      if (proj) {
-        proj.deleted = true;
-        proj.deletedAt = deletedAt;
-      }
-      db.tasks.forEach(t => {
-        if (t.projectId === id) {
-          t.deleted = true;
-          t.deletedAt = deletedAt;
-        }
-      });
+      if (proj) { proj.deleted = true; proj.deletedAt = deletedAt; }
+      db.tasks.forEach(t => { if (t.projectId === id) { t.deleted = true; t.deletedAt = deletedAt; } });
       writeDb(db);
       return true;
     }
   },
 
-  // Hard delete (for 15 days cleanup or manual permanent delete)
   deleteProjectPermanent: async (id: string): Promise<boolean> => {
     if (isMongoConnected) {
       await MongoProject.deleteOne({ _id: id } as any);
@@ -528,16 +513,8 @@ export const dbStore = {
     } else {
       const db = readDb();
       const proj = db.projects.find(p => p.id === id);
-      if (proj) {
-        proj.deleted = false;
-        proj.deletedAt = undefined;
-      }
-      db.tasks?.forEach(t => {
-        if (t.projectId === id) {
-          t.deleted = false;
-          t.deletedAt = undefined;
-        }
-      });
+      if (proj) { proj.deleted = false; proj.deletedAt = undefined; }
+      db.tasks?.forEach(t => { if (t.projectId === id) { t.deleted = false; t.deletedAt = undefined; } });
       writeDb(db);
       return true;
     }
@@ -555,18 +532,13 @@ export const dbStore = {
   getTasks: async (projectId?: string, includeDeleted = false): Promise<Task[]> => {
     if (isMongoConnected) {
       const query: any = includeDeleted ? {} : { $or: [{ deleted: false }, { deleted: { $exists: false } }, { deleted: null }] };
-      if (projectId) {
-        query.projectId = projectId;
-      }
+      if (projectId) query.projectId = projectId;
       const docs = await MongoTask.find(query as any);
       return mapMongoDocs<Task>(docs);
     }
     const tasks = readDb().tasks;
-    let filtered = includeDeleted ? tasks : tasks.filter(t => !t.deleted);
-    if (projectId) {
-      return filtered.filter(t => t.projectId === projectId);
-    }
-    return filtered;
+    const filtered = includeDeleted ? tasks : tasks.filter(t => !t.deleted);
+    return projectId ? filtered.filter(t => t.projectId === projectId) : filtered;
   },
 
   getTaskById: async (id: string): Promise<Task | null> => {
@@ -579,12 +551,7 @@ export const dbStore = {
 
   createTask: async (task: Omit<Task, "id" | "timeLogs">): Promise<Task> => {
     const id = genId("tsk");
-    const newTsk = {
-      _id: id,
-      ...task,
-      timeLogs: [],
-      deleted: false
-    };
+    const newTsk = { _id: id, ...task, timeLogs: [], deleted: false };
 
     if (isMongoConnected) {
       const created = await MongoTask.create(newTsk as any);
@@ -612,7 +579,6 @@ export const dbStore = {
     }
   },
 
-  // Soft delete
   deleteTask: async (id: string): Promise<boolean> => {
     const deletedAt = new Date().toISOString();
     if (isMongoConnected) {
@@ -621,16 +587,12 @@ export const dbStore = {
     } else {
       const db = readDb();
       const t = db.tasks.find(x => x.id === id);
-      if (t) {
-        t.deleted = true;
-        t.deletedAt = deletedAt;
-      }
+      if (t) { t.deleted = true; t.deletedAt = deletedAt; }
       writeDb(db);
       return true;
     }
   },
 
-  // Permanent Delete
   deleteTaskPermanent: async (id: string): Promise<boolean> => {
     if (isMongoConnected) {
       await MongoTask.deleteOne({ _id: id } as any);
@@ -652,10 +614,7 @@ export const dbStore = {
     } else {
       const db = readDb();
       const t = db.tasks.find(x => x.id === id);
-      if (t) {
-        t.deleted = false;
-        t.deletedAt = undefined;
-      }
+      if (t) { t.deleted = false; t.deletedAt = undefined; }
       writeDb(db);
       return true;
     }
@@ -671,11 +630,7 @@ export const dbStore = {
 
   addTaskLog: async (taskId: string, log: Omit<any, "id" | "createdAt">): Promise<any> => {
     const logId = genId("log");
-    const newLog = {
-      ...log,
-      id: logId,
-      createdAt: new Date().toISOString()
-    };
+    const newLog = { ...log, id: logId, createdAt: new Date().toISOString() };
 
     if (isMongoConnected) {
       const updated = await MongoTask.findOneAndUpdate(
@@ -737,7 +692,7 @@ export const dbStore = {
       userName: user.name,
       userRole: user.role,
       content,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
     if (isMongoConnected) {
@@ -752,8 +707,6 @@ export const dbStore = {
     }
   },
 
-  // Edit an existing comment's content. Authorization (own-comment-only,
-  // unless admin) is enforced in server.ts before this is ever called.
   updateComment: async (id: string, content: string): Promise<Comment | null> => {
     const editedAt = new Date().toISOString();
     if (isMongoConnected) {
@@ -793,13 +746,7 @@ export const dbStore = {
 
   createTeam: async (name: string, description: string, leadId: string): Promise<Team> => {
     const id = genId("team");
-    const team = {
-      _id: id,
-      name,
-      description,
-      leadId,
-      membersCount: 0
-    };
+    const team = { _id: id, name, description, leadId, membersCount: 0 };
 
     if (isMongoConnected) {
       const created = await MongoTeam.create(team as any);
@@ -810,9 +757,7 @@ export const dbStore = {
       const localTeam = { ...team, id };
       db.teams.push(localTeam);
       const lead = db.users.find(u => u.id === leadId);
-      if (lead) {
-        lead.teamId = id;
-      }
+      if (lead) lead.teamId = id;
       writeDb(db);
       return localTeam;
     }
@@ -825,10 +770,7 @@ export const dbStore = {
     } else {
       const db = readDb();
       const item = db.teams.find(t => t.id === id);
-      if (item) {
-        Object.assign(item, data);
-        writeDb(db);
-      }
+      if (item) { Object.assign(item, data); writeDb(db); }
       return item || null;
     }
   },
@@ -841,9 +783,7 @@ export const dbStore = {
     } else {
       const db = readDb();
       db.teams = db.teams.filter(t => t.id !== id);
-      db.users.forEach(u => {
-        if (u.teamId === id) u.teamId = undefined;
-      });
+      db.users.forEach(u => { if (u.teamId === id) u.teamId = undefined; });
       writeDb(db);
       return true;
     }
@@ -856,7 +796,9 @@ export const dbStore = {
       const notifs = mapMongoDocs<Notification>(docs);
       return notifs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }
-    return readDb().notifications.filter(n => n.userId === userId).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return readDb().notifications
+      .filter(n => n.userId === userId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   },
 
   createNotification: async (userId: string, type: string, message: string, relatedProjectId?: string): Promise<Notification> => {
@@ -868,7 +810,7 @@ export const dbStore = {
       message,
       isRead: false,
       relatedProjectId,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
     if (isMongoConnected) {
@@ -890,10 +832,7 @@ export const dbStore = {
     } else {
       const db = readDb();
       const target = db.notifications.find(n => n.id === id);
-      if (target) {
-        target.isRead = true;
-        writeDb(db);
-      }
+      if (target) { target.isRead = true; writeDb(db); }
       return target || null;
     }
   },
@@ -904,11 +843,7 @@ export const dbStore = {
       return true;
     } else {
       const db = readDb();
-      db.notifications.forEach(n => {
-        if (n.userId === userId) {
-          n.isRead = true;
-        }
-      });
+      db.notifications.forEach(n => { if (n.userId === userId) n.isRead = true; });
       writeDb(db);
       return true;
     }
@@ -938,7 +873,7 @@ export const dbStore = {
       userName,
       action,
       details,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
     if (isMongoConnected) {
@@ -1005,10 +940,7 @@ export const dbStore = {
       } else {
         const db = readDb();
         const index = (db.invitations || []).findIndex(i => i.id === id);
-        if (index !== -1) {
-          db.invitations[index].status = "expired";
-          writeDb(db);
-        }
+        if (index !== -1) { db.invitations[index].status = "expired"; writeDb(db); }
       }
     }
 
@@ -1020,14 +952,11 @@ export const dbStore = {
       ...invitation,
       usedCount: 0,
       status: "active",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
     if (isMongoConnected) {
-      const created = await MongoInvitation.create({
-        _id: invitation.id,
-        ...defaultInvitation
-      } as any);
+      const created = await MongoInvitation.create({ _id: invitation.id, ...defaultInvitation } as any);
       return mapMongoDoc<Invitation>(created);
     } else {
       const db = readDb();
@@ -1051,7 +980,7 @@ export const dbStore = {
     if (isMongoConnected) {
       await MongoInvitation.updateOne({ _id: id } as any, {
         $inc: { usedCount: 1 },
-        $set: { status: newStatus }
+        $set: { status: newStatus },
       });
       return true;
     } else {
@@ -1068,9 +997,7 @@ export const dbStore = {
 
   revokeInvitation: async (id: string): Promise<boolean> => {
     if (isMongoConnected) {
-      const res = await MongoInvitation.updateOne({ _id: id } as any, {
-        $set: { status: "expired" }
-      });
+      const res = await MongoInvitation.updateOne({ _id: id } as any, { $set: { status: "expired" } });
       return res.modifiedCount > 0;
     } else {
       const db = readDb();
@@ -1081,5 +1008,5 @@ export const dbStore = {
       writeDb(db);
       return true;
     }
-  }
+  },
 } as any;
