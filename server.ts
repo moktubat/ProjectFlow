@@ -27,7 +27,7 @@ const REQUIRED_ENV_VARS = ["APP_URL"] as const;
 for (const key of REQUIRED_ENV_VARS) {
   if (!process.env[key]) {
     console.error(`[FATAL] Missing required environment variable: ${key}. Exiting.`);
-    process.exit(1);
+    throw new Error(`Missing required environment variable: ${key}`);
   }
 }
 
@@ -138,7 +138,11 @@ async function runTrashAutoCleanup() {
 
 // ─── App builder ──────
 async function buildApp() {
-  await waitForDbReady();
+  try {
+    await waitForDbReady();
+  } catch (err) {
+    console.error("[DB] Connection failed, proceeding with JSON fallback:", err);
+  }
 
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
