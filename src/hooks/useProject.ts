@@ -69,7 +69,7 @@ export function useProject(projectId?: string) {
     return true;
   };
 
-  const uploadFile = async (name: string, url: string, category: string) => {
+  const uploadFile = async (name: string, url: string, category?: string) => {
     if (!token || !projectId) throw new Error("Authentication required.");
     const res = await fetch(`/api/files/confirm`, {
       method: "POST",

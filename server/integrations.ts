@@ -30,7 +30,7 @@ let isCloudinaryConfigured = false;
 
 if (process.env.CLOUDINARY_URL) {
   // Single-URL form: cloudinary://api_key:api_secret@cloud_name
-  cloudinary.config(); // SDK reads CLOUDINARY_URL automatically
+  cloudinary.config();
   isCloudinaryConfigured = true;
   console.log("[CLOUDINARY] Configured via CLOUDINARY_URL.");
 } else if (
@@ -182,16 +182,18 @@ export async function uploadToCloudinary(
   try {
     const isRawFile = !/\.(jpe?g|png|gif|webp|bmp|tiff|heic)$/i.test(filename);
 
-    // Derive a clean public_id from the filename (strip extension)
-    const lastDot = filename.lastIndexOf(".");
-    const rawName = lastDot !== -1 ? filename.substring(0, lastDot) : filename;
-    const publicId = rawName.replace(/[,/\\]/g, "_");
+    const sanitized = filename.replace(/[,/\\]/g, "_");
+
+    const lastDot = sanitized.lastIndexOf(".");
+    const publicId = isRawFile && lastDot > 0 ? sanitized.slice(0, lastDot) : sanitized;
+    const ext = isRawFile && lastDot > 0 ? sanitized.slice(lastDot + 1).toLowerCase() : undefined;
 
     const result = await cloudinary.uploader.upload(base64Data, {
       folder: folderName,
       public_id: publicId,
       overwrite: true,
       resource_type: isRawFile ? "raw" : "auto",
+      ...(ext ? { format: ext } : {}),
     });
 
     console.log("[CLOUDINARY] Upload successful:", result.secure_url);

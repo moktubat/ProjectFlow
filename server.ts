@@ -155,7 +155,7 @@ async function startServer() {
     legacyHeaders: false,
     message: { error: "AI generation rate limit reached. Please try again later." },
   });
-  
+
   const inviteValidateLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 30,
@@ -1255,6 +1255,54 @@ async function startServer() {
 
     res.status(201).json(fileItem);
   });
+
+  app.delete("/api/files/:fileId", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    const { projectId } = req.query;
+    if (!projectId) {
+      res.status(400).json({ error: "projectId query parameter is required." });
+      return;
+    }
+
+    const project = await dbStore.getProjectById(String(projectId));
+    if (!project) {
+      res.status(404).json({ error: "Project not found." });
+      return;
+    }
+
+    if (!canManageProject(caller, project)) {
+      res.status(403).json({ error: "You don't have permission to remove files from this project." });
+      return;
+    }
+
+    const fileItem = (project.files ?? []).find((f) => f.id === req.params.fileId);
+    if (!fileItem) {
+      res.status(404).json({ error: "File not found on this project." });
+      return;
+    }
+
+    if (fileItem.url?.includes(`/${CLOUDINARY_FOLDER}/`)) {
+      try {
+        await deleteFromCloudinary(fileItem.url);
+      } catch (e) {
+        console.error("[CLOUDINARY] file delete failed:", e);
+      }
+    }
+
+    const remainingFiles = project.files.filter((f) => f.id !== req.params.fileId);
+    await dbStore.updateProject(String(projectId), { files: remainingFiles });
+
+    await dbStore.createActivity(
+      String(projectId),
+      caller.id,
+      caller.name,
+      "file_uploaded",
+      `Removed document "${fileItem.name}"`
+    );
+
+    res.json({ success: true, message: "File removed." });
+  });
+
 
   // ─── Activities ────
   app.get("/api/projects/:id/activities", authenticateUser, async (req, res) => {

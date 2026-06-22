@@ -22,6 +22,11 @@ import DOMPurify from "dompurify";
 
 const SEL = "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:border-[#0038BC] focus:ring-2 focus:ring-[#0038BC]/10";
 
+const IMAGE_EXT_RE = /\.(jpe?g|png|gif|webp|bmp|svg)$/i;
+function isImageFile(name: string, url: string): boolean {
+  return IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(url);
+}
+
 // ─── Inline-editable field ────────────────────────────────────────────────────
 function InlineEditText({
   value,
@@ -118,6 +123,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const [isTaskPanel, setTaskPanel] = useState(false);
   const [isFilePanel, setFilePanel] = useState(false);
   const [isRosterPanel, setRosterPanel] = useState(false);
+  const [lightboxFile, setLightboxFile] = useState<{ url: string; name: string } | null>(null);
 
   // ── Inline description editing ──
   const [editingDesc, setEditingDesc] = useState(false);
@@ -148,11 +154,11 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   // File form
   const [fName, setFName] = useState("");
   const [fUrl, setFUrl] = useState("");
-  const [fCat, setFCat] = useState("Specification");
   const [fErr, setFErr] = useState<string | null>(null);
   const [fBusy, setFBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
 
   // Roster / invite
   const [invRole, setInvRole] = useState("DEVELOPER");
@@ -299,9 +305,29 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
     e.preventDefault();
     if (!fName.trim() || !fUrl.trim()) { setFErr("Name and URL are required."); return; }
     setFBusy(true); setFErr(null);
-    try { await uploadFile(fName, fUrl, fCat); setFilePanel(false); setFName(""); setFUrl(""); setFCat("Specification"); }
+    try { await uploadFile(fName, fUrl); setFilePanel(false); setFName(""); setFUrl(""); }
     catch (e: any) { setFErr(e.message); }
     finally { setFBusy(false); }
+  };
+
+  const handleDeleteFile = async (fileId: string, fileName: string) => {
+    if (!confirm(`Remove "${fileName}" from this project?`)) return;
+    setDeletingFileId(fileId);
+    try {
+      const res = await fetch(`/api/files/${fileId}?projectId=${projectId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({} as { error?: string }));
+        throw new Error(data.error || `Failed to delete file (${res.status}).`);
+      }
+      await reloadProject();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setDeletingFileId(null);
+    }
   };
 
   const addToProject = async (uid: string) => {
@@ -548,11 +574,32 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
               <div key={f.id} className="flex items-center justify-between p-2.5 bg-[#F7F8FA] border border-[#E8E8E8] rounded-lg">
                 <div className="min-w-0 pr-2">
                   <p className="text-sm text-[#111111] truncate">{f.name}</p>
-                  <p className="text-xs text-[#737373]">{f.category}</p>
                 </div>
-                <a href={f.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-[#0038BC] hover:underline shrink-0">
-                  <Download className="w-3 h-3" /> Open
-                </a>
+                <div className="flex items-center gap-3 shrink-0">
+                  {isImageFile(f.name, f.url) ? (
+                    <button
+                      type="button"
+                      onClick={() => setLightboxFile({ url: f.url, name: f.name })}
+                      className="flex items-center gap-1 text-xs text-[#0038BC] hover:underline"
+                    >
+                      <ImageIcon className="w-3 h-3" /> Preview
+                    </button>
+                  ) : (
+                    <a href={f.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-[#0038BC] hover:underline">
+                      <Download className="w-3 h-3" /> Open
+                    </a>
+                  )}
+                  <button
+                    onClick={() => handleDeleteFile(f.id, f.name)}
+                    disabled={deletingFileId === f.id}
+                    className="p-1 text-[#A0A0A0] hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
+                    title="Delete file"
+                  >
+                    {deletingFileId === f.id
+                      ? <div className="w-3 h-3 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                      : <Trash2 className="w-3 h-3" />}
+                  </button>
+                </div>
               </div>
             )) : (
               <div className="py-8 text-center">
@@ -696,12 +743,6 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           </div>
           <Input label="File name" value={fName} onChange={(e) => setFName(e.target.value)} required />
           <Input label="File URL" value={fUrl} onChange={(e) => setFUrl(e.target.value)} placeholder="https://…" required />
-          <div>
-            <label className="block text-xs text-[#737373] mb-1">Category</label>
-            <select value={fCat} onChange={(e) => setFCat(e.target.value)} className={SEL}>
-              {["Specification", "Cover Photo", "Mockup / Figma", "Billing / Invoice", "Client Contract"].map((c) => <option key={c}>{c}</option>)}
-            </select>
-          </div>
           <div className="flex justify-end gap-2 pt-2 border-t border-[#E8E8E8]">
             <Button type="button" variant="outline" onClick={() => setFilePanel(false)}>Cancel</Button>
             <Button type="submit" variant="primary" isLoading={fBusy}>Save file</Button>
@@ -791,6 +832,42 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           </div>
         </div>
       </SlidePanel>
-    </div>
+
+      {/* Image lightbox */}
+      {lightboxFile && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setLightboxFile(null)}
+        >
+          <button
+            onClick={() => setLightboxFile(null)}
+            className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors"
+            aria-label="Close preview"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <div className="max-w-4xl max-h-[85vh] flex flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={lightboxFile.url}
+              alt={lightboxFile.name}
+              className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-2xl"
+            />
+            <div className="flex items-center gap-3">
+              <p className="text-sm text-white/80 truncate max-w-xs">{lightboxFile.name}</p>
+              <a
+                href={lightboxFile.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-white bg-white/10 hover:bg-white/20 px-2.5 py-1.5 rounded-lg transition-colors"
+              >
+                <Download className="w-3 h-3" /> Open original
+              </a>
+            </div>
+          </div>
+        </div>
+      )
+      }
+
+    </div >
   );
 }
