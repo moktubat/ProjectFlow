@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import crypto from "crypto";
@@ -48,6 +49,11 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.APP_URL || "
   .split(",")
   .map((s) => s.trim().replace(/\/+$/, ""))
   .filter(Boolean);
+
+if (process.env.NODE_ENV !== "production") {
+  ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"]
+    .forEach((o) => { if (!ALLOWED_ORIGINS.includes(o)) ALLOWED_ORIGINS.push(o); });
+}
 
 // ─── Password hashing ──────
 async function hashPassword(password: string): Promise<string> {
@@ -130,12 +136,7 @@ async function runTrashAutoCleanup() {
   }
 }
 
-// ─── App builder ───────────────────────────────────────────────────────────
-// Builds and returns a fully configured Express app WITHOUT calling listen().
-// This lets the same app be reused by:
-//   - the local dev/production entrypoint at the bottom of this file (app.listen)
-//   - api/index.ts, which imports getApp() and hands requests to Vercel's
-//     serverless runtime instead of a long-lived process.
+// ─── App builder ──────
 async function buildApp() {
   await waitForDbReady();
 
@@ -153,7 +154,11 @@ async function buildApp() {
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        if (ALLOWED_ORIGINS.includes(origin)) {
           callback(null, true);
         } else {
           callback(new Error("Not allowed by CORS"));

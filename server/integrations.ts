@@ -5,7 +5,9 @@
 
 import { v2 as cloudinary } from "cloudinary";
 import { Resend } from "resend";
+import dotenv from "dotenv";
 
+dotenv.config();
 
 // ─── Startup environment validation 
 const missingEnvWarnings: string[] = [];

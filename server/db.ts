@@ -7,8 +7,10 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import mongoose from "mongoose";
+import dotenv from "dotenv";
 import { User, Project, Task, Team, Comment, Notification, Role, UserStatus, Activity, Invitation } from "../src/types/index.js";
 
+dotenv.config();
 
 const STORE_PATH = path.join(process.cwd(), "server", "store.json");
 
