@@ -94,7 +94,50 @@ function csvField(value: string): string {
   return `"${v.replace(/"/g, '""')}"`;
 }
 
-async function startServer() {
+// ─── Garbage Collection ────
+// Defined at module scope so it can be invoked both by the local interval
+// timer (non-Vercel) and, in the future, by a serverless cron route.
+async function runTrashAutoCleanup() {
+  const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+  console.log(`[GARBAGE COLLECTION] Scanning for items soft-deleted before ${fifteenDaysAgo.toISOString()}`);
+  try {
+    const trashedProjects = await dbStore.getTrashedProjects();
+    for (const proj of trashedProjects) {
+      if (proj.deletedAt && new Date(proj.deletedAt) < fifteenDaysAgo) {
+        console.log(`[GARBAGE COLLECTION] Permanently purging project "${proj.name}" (ID: ${proj.id})`);
+        if (proj.coverImageUrl?.includes(`/${CLOUDINARY_FOLDER}/`)) {
+          await deleteFromCloudinary(proj.coverImageUrl).catch(e => console.error("[GC] Cloudinary cover delete failed:", e));
+        }
+        if (proj.files && proj.files.length > 0) {
+          for (const f of proj.files) {
+            if (f.url?.includes(`/${CLOUDINARY_FOLDER}/`)) {
+              await deleteFromCloudinary(f.url).catch(e => console.error("[GC] Cloudinary file delete failed:", e));
+            }
+          }
+        }
+        await dbStore.deleteProjectPermanent(proj.id);
+      }
+    }
+
+    const trashedTasks = await dbStore.getTrashedTasks();
+    for (const t of trashedTasks) {
+      if (t.deletedAt && new Date(t.deletedAt) < fifteenDaysAgo) {
+        console.log(`[GARBAGE COLLECTION] Permanently purging task "${t.title}" (ID: ${t.id})`);
+        await dbStore.deleteTaskPermanent(t.id);
+      }
+    }
+  } catch (err) {
+    console.error("[GARBAGE COLLECTION] Error inside periodic vacuum job:", err);
+  }
+}
+
+// ─── App builder ───────────────────────────────────────────────────────────
+// Builds and returns a fully configured Express app WITHOUT calling listen().
+// This lets the same app be reused by:
+//   - the local dev/production entrypoint at the bottom of this file (app.listen)
+//   - api/index.ts, which imports getApp() and hands requests to Vercel's
+//     serverless runtime instead of a long-lived process.
+async function buildApp() {
   await waitForDbReady();
 
   const app = express();
@@ -1256,6 +1299,16 @@ async function startServer() {
     res.status(201).json(fileItem);
   });
 
+  // ─── Activities ────
+  app.get("/api/projects/:id/activities", authenticateUser, async (req, res) => {
+    try {
+      const activities = await dbStore.getActivities(req.params.id);
+      res.json(activities);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to fetch activities." });
+    }
+  });
+
   app.delete("/api/files/:fileId", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
     const { projectId } = req.query;
@@ -1301,17 +1354,6 @@ async function startServer() {
     );
 
     res.json({ success: true, message: "File removed." });
-  });
-
-
-  // ─── Activities ────
-  app.get("/api/projects/:id/activities", authenticateUser, async (req, res) => {
-    try {
-      const activities = await dbStore.getActivities(req.params.id);
-      res.json(activities);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || "Failed to fetch activities." });
-    }
   });
 
   // ─── Trash ────
@@ -1405,41 +1447,6 @@ async function startServer() {
     }
   });
 
-  // ─── Garbage Collection ────
-  async function runTrashAutoCleanup() {
-    const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
-    console.log(`[GARBAGE COLLECTION] Scanning for items soft-deleted before ${fifteenDaysAgo.toISOString()}`);
-    try {
-      const trashedProjects = await dbStore.getTrashedProjects();
-      for (const proj of trashedProjects) {
-        if (proj.deletedAt && new Date(proj.deletedAt) < fifteenDaysAgo) {
-          console.log(`[GARBAGE COLLECTION] Permanently purging project "${proj.name}" (ID: ${proj.id})`);
-          if (proj.coverImageUrl?.includes(`/${CLOUDINARY_FOLDER}/`)) {
-            await deleteFromCloudinary(proj.coverImageUrl).catch(e => console.error("[GC] Cloudinary cover delete failed:", e));
-          }
-          if (proj.files && proj.files.length > 0) {
-            for (const f of proj.files) {
-              if (f.url?.includes(`/${CLOUDINARY_FOLDER}/`)) {
-                await deleteFromCloudinary(f.url).catch(e => console.error("[GC] Cloudinary file delete failed:", e));
-              }
-            }
-          }
-          await dbStore.deleteProjectPermanent(proj.id);
-        }
-      }
-
-      const trashedTasks = await dbStore.getTrashedTasks();
-      for (const t of trashedTasks) {
-        if (t.deletedAt && new Date(t.deletedAt) < fifteenDaysAgo) {
-          console.log(`[GARBAGE COLLECTION] Permanently purging task "${t.title}" (ID: ${t.id})`);
-          await dbStore.deleteTaskPermanent(t.id);
-        }
-      }
-    } catch (err) {
-      console.error("[GARBAGE COLLECTION] Error inside periodic vacuum job:", err);
-    }
-  }
-
   // ─── AI Proxy ────
   app.post("/api/ai/generate", authenticateUser, aiLimiter, async (req, res) => {
     const { prompt } = req.body;
@@ -1484,7 +1491,7 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -1492,20 +1499,37 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`ProjectFlow full-stack server running on http://localhost:${PORT}`);
-
-    setTimeout(() => {
-      runTrashAutoCleanup().catch(e => console.error("Initial cleanup pass failed:", e));
-    }, 10000);
-
-    setInterval(() => {
-      runTrashAutoCleanup().catch(e => console.error("Periodic cleanup pass failed:", e));
-    }, 30 * 60 * 1000);
-  });
+  return { app, PORT };
 }
 
-startServer().catch(err => {
-  console.error("Failed to start server:", err);
-  process.exit(1);
-});
+// ─── Exported accessor for serverless entrypoints (e.g. api/index.ts) ────────
+let cachedAppPromise: Promise<express.Express> | null = null;
+
+export async function getApp(): Promise<express.Express> {
+  if (!cachedAppPromise) {
+    cachedAppPromise = buildApp().then(({ app }) => app);
+  }
+  return cachedAppPromise;
+}
+
+// ─── Local / traditional-server entrypoint ────────────────────────────────────
+if (!process.env.VERCEL) {
+  buildApp()
+    .then(({ app, PORT }) => {
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`ProjectFlow full-stack server running on http://localhost:${PORT}`);
+
+        setTimeout(() => {
+          runTrashAutoCleanup().catch(e => console.error("Initial cleanup pass failed:", e));
+        }, 10000);
+
+        setInterval(() => {
+          runTrashAutoCleanup().catch(e => console.error("Periodic cleanup pass failed:", e));
+        }, 30 * 60 * 1000);
+      });
+    })
+    .catch(err => {
+      console.error("Failed to start server:", err);
+      process.exit(1);
+    });
+}
