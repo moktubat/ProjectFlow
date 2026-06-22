@@ -11,7 +11,6 @@ import bcrypt from "bcrypt";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
-import { createServer as createViteServer } from "vite";
 import { dbStore, waitForDbReady } from "./server/db.js";
 import { Role, UserStatus } from "./src/types/index.js";
 import {
@@ -1493,7 +1492,8 @@ async function buildApp() {
   });
 
   // ─── Static / Vite ───────────────────────────────────────────────────────────
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
