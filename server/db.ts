@@ -36,6 +36,7 @@ interface DatabaseSchema {
   activities: Activity[];
   invitations: Invitation[];
   sessions: SessionRecord[];
+  workspaceRecentAssignees: string[];
 }
 
 const initialDb: DatabaseSchema = {
@@ -48,6 +49,7 @@ const initialDb: DatabaseSchema = {
   activities: [],
   invitations: [],
   sessions: [],
+  workspaceRecentAssignees: [],
 };
 
 // Ensure server folder exists
@@ -68,6 +70,7 @@ function readDb(): DatabaseSchema {
     if (!parsed.sessions) parsed.sessions = [];
     if (!parsed.activities) parsed.activities = [];
     if (!parsed.invitations) parsed.invitations = [];
+    if (!parsed.workspaceRecentAssignees) parsed.workspaceRecentAssignees = []; // NEW
     return parsed;
   } catch (err) {
     console.error("Failed to read database store:", err);
@@ -158,10 +161,9 @@ const ProjectSchema = new mongoose.Schema({
   _id: { type: String, required: true },
   name: { type: String, required: true },
   richTextDescription: { type: String, default: "" },
-  status: { type: String, required: true },
   priority: { type: String, required: true },
-  startDate: { type: String, required: true },
-  endDate: { type: String, required: true },
+  startDate: { type: String },
+  endDate: { type: String },
   coverImageUrl: { type: String },
   ownerId: { type: String, required: true },
   tags: { type: [String], default: [] },
@@ -173,6 +175,7 @@ const ProjectSchema = new mongoose.Schema({
     category: String,
     uploadedAt: String,
   }],
+  recentAssignees: { type: [String], default: [] },
   deleted: { type: Boolean, default: false },
   deletedAt: { type: String },
 }, { versionKey: false, _id: false });
@@ -198,7 +201,13 @@ const TaskSchema = new mongoose.Schema({
     completed: { type: Boolean, default: false },
     createdAt: String,
   }],
-  dependencies: [String],
+  dependencies: [{
+    id: String,
+    taskId: String,
+    userId: String,
+    teamId: String,
+    note: String,
+  }],
   deleted: { type: Boolean, default: false },
   deletedAt: { type: String },
 }, { versionKey: false, _id: false });
@@ -252,11 +261,18 @@ const InvitationSchema = new mongoose.Schema({
 
 // Sessions get a TTL index in Mongo so expired tokens are automatically reaped.
 const SessionSchema = new mongoose.Schema({
-  _id: { type: String, required: true }, // the token itself
+  _id: { type: String, required: true },
   userId: { type: String, required: true },
   createdAt: { type: String, required: true },
   expiresAt: { type: Date, required: true, expires: 0 },
 }, { versionKey: false, _id: false });
+
+const WorkspaceMetaSchema = new mongoose.Schema({
+  _id: { type: String, required: true },
+  recentAssignees: { type: [String], default: [] },
+}, { versionKey: false, _id: false });
+
+const MongoWorkspaceMeta = mongoose.models.WorkspaceMeta || mongoose.model("WorkspaceMeta", WorkspaceMetaSchema);
 
 const MongoUser = mongoose.models.User || mongoose.model("User", UserSchema);
 const MongoTeam = mongoose.models.Team || mongoose.model("Team", TeamSchema);
@@ -279,6 +295,26 @@ function mapMongoDoc<T>(doc: any): T {
 function mapMongoDocs<T>(docs: any[]): T[] {
   return (docs || []).map(mapMongoDoc) as any;
 }
+
+function normalizeTaskDependencies(task: any): any {
+  if (!task || !Array.isArray(task.dependencies)) return task;
+  task.dependencies = task.dependencies.map((d: any) => {
+    if (typeof d === "string") {
+      return { id: "dep_legacy_" + d, taskId: d };
+    }
+    return d;
+  });
+  return task;
+}
+
+function normalizeTask(task: any): any {
+  return normalizeTaskDependencies(task);
+}
+
+function normalizeTasks(tasks: any[]): any[] {
+  return (tasks || []).map(normalizeTask);
+}
+
 
 export const dbStore = {
   // --- USERS ---
@@ -534,19 +570,20 @@ export const dbStore = {
       const query: any = includeDeleted ? {} : { $or: [{ deleted: false }, { deleted: { $exists: false } }, { deleted: null }] };
       if (projectId) query.projectId = projectId;
       const docs = await MongoTask.find(query as any);
-      return mapMongoDocs<Task>(docs);
+      return normalizeTasks(mapMongoDocs<Task>(docs));
     }
     const tasks = readDb().tasks;
     const filtered = includeDeleted ? tasks : tasks.filter(t => !t.deleted);
-    return projectId ? filtered.filter(t => t.projectId === projectId) : filtered;
+    const scoped = projectId ? filtered.filter(t => t.projectId === projectId) : filtered;
+    return normalizeTasks(scoped);
   },
 
   getTaskById: async (id: string): Promise<Task | null> => {
     if (isMongoConnected) {
       const doc = await MongoTask.findOne({ _id: id } as any);
-      return mapMongoDoc<Task>(doc);
+      return normalizeTask(mapMongoDoc<Task>(doc));
     }
-    return readDb().tasks.find(t => t.id === id) || null;
+    return normalizeTask(readDb().tasks.find(t => t.id === id) || null);
   },
 
   createTask: async (task: Omit<Task, "id" | "timeLogs">): Promise<Task> => {
@@ -1007,6 +1044,34 @@ export const dbStore = {
       db.invitations[index].status = "expired";
       writeDb(db);
       return true;
+    }
+  },
+
+  getWorkspaceRecentAssignees: async (): Promise<string[]> => {
+    if (isMongoConnected) {
+      const doc = await MongoWorkspaceMeta.findOne({ _id: "singleton" } as any);
+      return doc?.recentAssignees ?? [];
+    }
+    return readDb().workspaceRecentAssignees || [];
+  },
+
+  addWorkspaceRecentAssignees: async (ids: string[]): Promise<void> => {
+    if (ids.length === 0) return;
+    if (isMongoConnected) {
+      const doc = await MongoWorkspaceMeta.findOne({ _id: "singleton" } as any);
+      const existing = doc?.recentAssignees ?? [];
+      const merged = [...ids, ...existing.filter((id: string) => !ids.includes(id))].slice(0, 25);
+      await MongoWorkspaceMeta.findOneAndUpdate(
+        { _id: "singleton" } as any,
+        { $set: { recentAssignees: merged } } as any,
+        { upsert: true } as any
+      );
+    } else {
+      const db = readDb();
+      const existing = db.workspaceRecentAssignees || [];
+      const merged = [...ids, ...existing.filter((id: string) => !ids.includes(id))].slice(0, 25);
+      db.workspaceRecentAssignees = merged;
+      writeDb(db);
     }
   },
 } as any;

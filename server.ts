@@ -537,24 +537,31 @@ async function buildApp() {
 
   app.post("/api/projects", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
-    const { name, richTextDescription, status, priority, startDate, endDate, coverImageUrl, tags, members } = req.body;
-    if (!name || !richTextDescription || !startDate || !endDate) {
-      res.status(400).json({ error: "Name, description, start and end dates are required." });
+    const { name, richTextDescription, priority, startDate, endDate, coverImageUrl, tags, members } = req.body;
+    if (!name) {
+      res.status(400).json({ error: "Project name is required." });
+      return;
+    }
+    if ((startDate && !endDate) || (endDate && !startDate)) {
+      res.status(400).json({ error: "Provide both a start and end date, or leave both blank." });
       return;
     }
 
     const project = await dbStore.createProject({
       name,
-      richTextDescription,
-      status: status || "Planning",
+      richTextDescription: richTextDescription || "",
       priority: priority || "Low",
-      startDate,
-      endDate,
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
       coverImageUrl,
       ownerId: caller.id,
       tags: tags || [],
       members: members || [caller.id],
     });
+
+    if (Array.isArray(members) && members.length > 0) {
+      await dbStore.addWorkspaceRecentAssignees(members);
+    }
 
     await dbStore.createActivity(project.id, caller.id, caller.name, "project_created", `Created project: "${project.name}"`);
 
@@ -760,12 +767,25 @@ async function buildApp() {
       }
     }
 
-    let cleanDependencies: string[] = [];
+    const cleanDependencies: { id: string; taskId?: string; userId?: string; teamId?: string; note?: string }[] = [];
     if (Array.isArray(dependencies) && dependencies.length > 0) {
       const projectTasks = await dbStore.getTasks(projectId, true);
-      const validIds = new Set(projectTasks.map(t => t.id));
-      cleanDependencies = dependencies.filter((d: string) => validIds.has(d));
+      const validTaskIds = new Set(projectTasks.map(t => t.id));
+      for (const dep of dependencies) {
+        if (!dep || typeof dep !== "object") continue;
+        const note = typeof dep.note === "string" ? dep.note.slice(0, 280) : undefined;
+        if (dep.taskId && validTaskIds.has(dep.taskId)) {
+          cleanDependencies.push({ id: "dep_" + crypto.randomBytes(6).toString("hex"), taskId: dep.taskId, note });
+        } else if (dep.userId) {
+          const u = await dbStore.getUserById(dep.userId);
+          if (u) cleanDependencies.push({ id: "dep_" + crypto.randomBytes(6).toString("hex"), userId: u.id, note });
+        } else if (dep.teamId) {
+          const t = await dbStore.getTeamById(dep.teamId);
+          if (t) cleanDependencies.push({ id: "dep_" + crypto.randomBytes(6).toString("hex"), teamId: t.id, note });
+        }
+      }
     }
+
 
     const task = await dbStore.createTask({
       projectId,
@@ -778,7 +798,14 @@ async function buildApp() {
       estimatedHours: Number(estimatedHours) || 0,
       assignees: cleanAssignees,
       dependencies: cleanDependencies,
-    });
+    } as any);
+
+    if (cleanAssignees.length > 0) {
+      const ids = cleanAssignees.map(a => a.userId || a.teamId).filter(Boolean) as string[];
+      const existing = (project as any).recentAssignees || [];
+      const merged = [...ids, ...existing.filter((id: string) => !ids.includes(id))].slice(0, 25);
+      await dbStore.updateProject(projectId, { recentAssignees: merged } as any);
+    }
 
     const allUsers = await dbStore.getUsers();
 
@@ -865,16 +892,33 @@ async function buildApp() {
     }
 
     if (req.body.status === "Done") {
-      if (task.dependencies && task.dependencies.length > 0) {
-        const projectTasks = await dbStore.getTasks(task.projectId);
-        const incompleteDeps = projectTasks.filter(t =>
-          task.dependencies!.includes(t.id) &&
-          t.status !== "Done" &&
-          !t.deleted
-        );
-        if (incompleteDeps.length > 0) {
+      const deps = (task.dependencies ?? []) as any[];
+      if (deps.length > 0) {
+        const blockers: string[] = [];
+
+        const taskDepIds = deps.filter(d => d.taskId).map(d => d.taskId);
+        if (taskDepIds.length > 0) {
+          const projectTasks = await dbStore.getTasks(task.projectId);
+          const incompleteDeps = projectTasks.filter(t => taskDepIds.includes(t.id) && t.status !== "Done" && !t.deleted);
+          blockers.push(...incompleteDeps.map(t => `"${t.title}" is not Done`));
+        }
+
+        const personDeps = deps.filter(d => d.userId || d.teamId);
+        for (const d of personDeps) {
+          const isAssigned = d.userId
+            ? task.assignees.some(a => a.userId === d.userId)
+            : task.assignees.some(a => a.teamId === d.teamId);
+          if (!isAssigned) {
+            const label = d.userId
+              ? (await dbStore.getUserById(d.userId))?.name || d.userId
+              : (await dbStore.getTeamById(d.teamId))?.name || d.teamId;
+            blockers.push(`waiting on ${label} to be assigned`);
+          }
+        }
+
+        if (blockers.length > 0) {
           res.status(400).json({
-            error: `Cannot set to Done. Blocked by unfinished dependencies: ${incompleteDeps.map(t => `"${t.title}"`).join(", ")}`,
+            error: `Cannot set to Done. Blocked: ${blockers.join(", ")}`,
           });
           return;
         }
@@ -895,10 +939,36 @@ async function buildApp() {
       }
       patch.assignees = cleanAssignees;
     }
+
     if (Array.isArray(patch.dependencies)) {
       const projectTasks = await dbStore.getTasks(task.projectId, true);
-      const validIds = new Set(projectTasks.filter(t => t.id !== task.id).map(t => t.id));
-      patch.dependencies = patch.dependencies.filter((d: string) => validIds.has(d));
+      const validTaskIds = new Set(projectTasks.filter(t => t.id !== task.id).map(t => t.id));
+      const cleaned: { id: string; taskId?: string; userId?: string; teamId?: string; note?: string }[] = [];
+      for (const dep of patch.dependencies) {
+        if (!dep || typeof dep !== "object") continue;
+        const note = typeof dep.note === "string" ? dep.note.slice(0, 280) : undefined;
+        const id = typeof dep.id === "string" ? dep.id : "dep_" + crypto.randomBytes(6).toString("hex");
+        if (dep.taskId && validTaskIds.has(dep.taskId)) {
+          cleaned.push({ id, taskId: dep.taskId, note });
+        } else if (dep.userId) {
+          const u = await dbStore.getUserById(dep.userId);
+          if (u) cleaned.push({ id, userId: u.id, note });
+        } else if (dep.teamId) {
+          const t = await dbStore.getTeamById(dep.teamId);
+          if (t) cleaned.push({ id, teamId: t.id, note });
+        }
+      }
+      patch.dependencies = cleaned;
+    }
+
+    // NEW: track recently-used assignees on update too, same as on create.
+    if (Array.isArray(patch.assignees) && patch.assignees.length > 0) {
+      const ids = patch.assignees.map((a: any) => a.userId || a.teamId).filter(Boolean) as string[];
+      if (ids.length > 0 && project) {
+        const existing = (project as any).recentAssignees || [];
+        const merged = [...ids, ...existing.filter((id: string) => !ids.includes(id))].slice(0, 25);
+        await dbStore.updateProject(task.projectId, { recentAssignees: merged } as any);
+      }
     }
 
     const originalStatus = task.status;
@@ -1209,6 +1279,12 @@ async function buildApp() {
       return;
     }
     res.json({ success: true });
+  });
+
+  // ─── Workspace-level recent assignees (used by New Project member picker) ────
+  app.get("/api/workspace/recent-assignees", authenticateUser, async (req, res) => {
+    const list = await dbStore.getWorkspaceRecentAssignees();
+    res.json({ recentAssignees: list });
   });
 
   // ─── Notifications ────

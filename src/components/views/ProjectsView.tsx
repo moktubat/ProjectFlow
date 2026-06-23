@@ -16,15 +16,15 @@ import {
   FolderKanban, Plus, Calendar, AlertCircle, Search, X,
   ArrowUpRight, CheckCircle2, ImageIcon, Check,
 } from "lucide-react";
+import { deriveProjectStatus, DerivedProjectStatus } from "../../lib/project-status.js";
+import { AssigneePicker } from "../AssigneePicker.js";
 
 const FALLBACK_COVER =
   "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?auto=format&fit=crop&q=80&w=600";
 
-const STATUS_META: Record<Project["status"], { dot: string; glass: string; ring: string }> = {
-  Planning: { dot: "bg-[#A0A0A0]", glass: "bg-white/15 border-white/25", ring: "#A0A0A0" },
-  "In Progress": { dot: "bg-[#5B8DEF]", glass: "bg-[#0038BC]/30 border-[#5B8DEF]/40", ring: "#0038BC" },
-  Review: { dot: "bg-[#FFCF85]", glass: "bg-[#EF8F00]/30 border-[#FFCF85]/40", ring: "#EF8F00" },
-  Completed: { dot: "bg-emerald-400", glass: "bg-emerald-500/30 border-emerald-300/40", ring: "#16a34a" },
+const STATUS_META: Record<DerivedProjectStatus, { dot: string; glass: string; ring: string }> = {
+  Ongoing: { dot: "bg-[#5B8DEF]", glass: "bg-[#0038BC]/30 border-[#5B8DEF]/40", ring: "#0038BC" },
+  Done: { dot: "bg-emerald-400", glass: "bg-emerald-500/30 border-emerald-300/40", ring: "#16a34a" },
 };
 
 const PRIORITY_META: Record<Project["priority"], { glass: string }> = {
@@ -34,7 +34,7 @@ const PRIORITY_META: Record<Project["priority"], { glass: string }> = {
   Critical: { glass: "bg-red-500/35 border-red-300/45" },
 };
 
-const STATUS_FILTERS = ["All", "Planning", "In Progress", "Review", "Completed"] as const;
+const STATUS_FILTERS = ["All", "Ongoing", "Done"] as const;
 
 // ─── Small stat pill for the header ──────────────────────────────────────────
 function StatPill({ label, value, accent = false }: { label: string; value: string | number; accent?: boolean }) {
@@ -128,7 +128,9 @@ export function ProjectsView() {
   const [endDate, setEndDate] = useState("");
   const [priority, setPriority] = useState<any>("Medium");
   const [status, setStatus] = useState<any>("Planning");
-  const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
+  const [selectedMembers, setSelectedMembers] = useState<{ userId?: string; teamId?: string }[]>([]);
+  const [teamsList, setTeamsList] = useState<{ id: string; name: string }[]>([]);
+  const [workspaceRecentIds, setWorkspaceRecentIds] = useState<string[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -139,14 +141,20 @@ export function ProjectsView() {
     Promise.all([
       fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
       fetch("/api/tasks", { headers: { Authorization: `Bearer ${token}` } }),
+      fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
+      fetch("/api/workspace/recent-assignees", { headers: { Authorization: `Bearer ${token}` } }),
     ])
-      .then(async ([uRes, tRes]) => [
+      .then(async ([uRes, tRes, teamRes, recentRes]) => [
         uRes.ok ? await uRes.json() : [],
         tRes.ok ? await tRes.json() : [],
+        teamRes.ok ? await teamRes.json() : [],
+        recentRes.ok ? await recentRes.json() : { recentAssignees: [] },
       ])
-      .then(([userData, taskData]) => {
+      .then(([userData, taskData, teamData, recentData]) => {
         setUsersList(userData.filter((u: User) => u.status === UserStatus.APPROVED));
         setAllTasks(taskData);
+        setTeamsList(teamData);
+        setWorkspaceRecentIds(recentData.recentAssignees ?? []);
       })
       .catch(() => { });
   }, [token]);
@@ -162,32 +170,41 @@ export function ProjectsView() {
     return map;
   }, [projects, allTasks]);
 
+  const projectStatuses = useMemo(() => {
+    const map: Record<string, DerivedProjectStatus> = {};
+    for (const p of projects) {
+      map[p.id] = deriveProjectStatus(allTasks.filter((t) => t.projectId === p.id));
+    }
+    return map;
+  }, [projects, allTasks]);
+
   const statusCounts = useMemo(() => {
     const c: Record<string, number> = {};
-    for (const p of projects) c[p.status] = (c[p.status] ?? 0) + 1;
+    for (const p of projects) {
+      const s = projectStatuses[p.id] ?? "Ongoing";
+      c[s] = (c[s] ?? 0) + 1;
+    }
     return c;
-  }, [projects]);
+  }, [projects, projectStatuses]);
 
   const filteredProjects = useMemo(() => {
     const q = query.trim().toLowerCase();
     return projects.filter((p) => {
-      if (statusFilter !== "All" && p.status !== statusFilter) return false;
+      if (statusFilter !== "All" && (projectStatuses[p.id] ?? "Ongoing") !== statusFilter) return false;
       if (!q) return true;
       return (
         p.name.toLowerCase().includes(q) ||
-        p.richTextDescription.replace(/<[^>]*>/g, "").toLowerCase().includes(q)
+        (p.richTextDescription || "").replace(/<[^>]*>/g, "").toLowerCase().includes(q)
       );
     });
-  }, [projects, query, statusFilter]);
+  }, [projects, query, statusFilter, projectStatuses]);
 
-  const activeCount = projects.filter((p) => p.status === "In Progress").length;
+  const activeCount = projects.filter((p) => (projectStatuses[p.id] ?? "Ongoing") === "Ongoing").length;
+
   const trackedProjects = projects.filter((p) => (projectStats[p.id]?.total ?? 0) > 0);
   const avgCompletion = trackedProjects.length
     ? Math.round(trackedProjects.reduce((s, p) => s + projectStats[p.id].pct, 0) / trackedProjects.length)
     : 0;
-
-  const toggleMember = (id: string) =>
-    setSelectedMembers((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const uploadCover = async (file: File) => {
     setIsUploading(true);
@@ -217,25 +234,38 @@ export function ProjectsView() {
 
   const resetForm = () => {
     setProjName(""); setCoverUrl(""); setDesc(""); setStartDate(""); setEndDate("");
-    setPriority("Medium"); setStatus("Planning"); setSelectedMembers([]); setFormError(null);
+    setPriority("Medium"); setSelectedMembers([]); setFormError(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!projName.trim() || !desc.trim() || !startDate || !endDate) {
-      setFormError("Project name, description, and dates are required.");
+    if (!projName.trim()) {
+      setFormError("Project name is required.");
+      return;
+    }
+    if ((startDate && !endDate) || (endDate && !startDate)) {
+      setFormError("Provide both a start and end date, or leave both blank.");
       return;
     }
     setIsSubmitting(true);
     setFormError(null);
     try {
+      const expandedUserIds = new Set<string>();
+      for (const sel of selectedMembers) {
+        if (sel.userId) expandedUserIds.add(sel.userId);
+        if (sel.teamId) {
+          usersList.filter((u) => u.teamId === sel.teamId).forEach((u) => expandedUserIds.add(u.id));
+        }
+      }
+      const memberIds = Array.from(expandedUserIds);
+
       await createProject({
         name: projName,
         coverImageUrl: coverUrl || FALLBACK_COVER,
         richTextDescription: desc,
-        startDate, endDate, priority, status,
-        members: selectedMembers.length ? selectedMembers : user ? [user.id] : [],
-      });
+        startDate, endDate, priority,
+        members: memberIds.length ? memberIds : user ? [user.id] : [],
+      } as any);
       resetForm();
       setIsPanelOpen(false);
       refresh();
@@ -245,6 +275,7 @@ export function ProjectsView() {
       setIsSubmitting(false);
     }
   };
+
 
   const SEL =
     "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-xl text-sm focus:outline-none focus:ring-4 focus:ring-[#0038BC]/10 focus:border-[#0038BC] transition-shadow";
@@ -394,17 +425,16 @@ export function ProjectsView() {
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
             {filteredProjects.map((proj, idx) => {
               const stats = projectStats[proj.id] ?? { total: 0, done: 0, pct: 0 };
-              const sMeta =
-                STATUS_META[proj.status as keyof typeof STATUS_META] ??
-                STATUS_META["Planning"];
+              const derivedStatus = projectStatuses[proj.id] ?? "Ongoing";
+              const sMeta = STATUS_META[derivedStatus];
 
               const pMeta =
                 PRIORITY_META[proj.priority as keyof typeof PRIORITY_META] ??
                 PRIORITY_META["Medium"];
 
-              const overdue = proj.status !== "Completed" && new Date(proj.endDate) < new Date();
-              const ringValue = stats.total ? stats.pct : proj.status === "Completed" ? 100 : 0;
-              const barValue = stats.total ? stats.pct : proj.status === "Completed" ? 100 : 6;
+              const overdue = derivedStatus !== "Done" && !!proj.endDate && new Date(proj.endDate) < new Date();
+              const ringValue = stats.total ? stats.pct : derivedStatus === "Done" ? 100 : 0;
+              const barValue = stats.total ? stats.pct : derivedStatus === "Done" ? 100 : 6;
 
               return (
                 <button
@@ -427,10 +457,10 @@ export function ProjectsView() {
                         className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-md ${sMeta.glass}`}
                       >
                         <span
-                          className={`h-1.5 w-1.5 rounded-full ${sMeta.dot} ${proj.status === "In Progress" ? "motion-safe:animate-pulse" : ""
+                          className={`h-1.5 w-1.5 rounded-full ${sMeta.dot} ${derivedStatus === "Ongoing" ? "motion-safe:animate-pulse" : ""
                             }`}
                         />
-                        {proj.status}
+                        {derivedStatus}
                       </span>
                       <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-md ${pMeta.glass}`}>
                         {proj.priority}
@@ -442,13 +472,13 @@ export function ProjectsView() {
                     </span>
                   </div>
 
-                  <FlowBar pct={barValue} active={proj.status === "In Progress"} />
+                  <FlowBar pct={barValue} active={derivedStatus === "Ongoing"} />
 
                   {/* Body */}
                   <div className="flex flex-1 flex-col gap-3 p-5">
                     <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#A0A0A0]">
                       <Calendar className="h-3 w-3" />
-                      {proj.startDate} → {proj.endDate}
+                      {proj.startDate && proj.endDate ? `${proj.startDate} → ${proj.endDate}` : "No timeline set"}
                       {overdue && (
                         <span className="ml-1.5 inline-flex items-center rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">
                           Past due
@@ -461,7 +491,7 @@ export function ProjectsView() {
                     </h3>
 
                     <p className="line-clamp-2 text-sm leading-relaxed text-[#737373]">
-                      {proj.richTextDescription.replace(/<[^>]*>/g, "") || "No description yet."}
+                      {(proj.richTextDescription || "").replace(/<[^>]*>/g, "") || "No description yet."}
                     </p>
 
                     <div className="mt-auto flex items-center justify-between border-t border-[#F4F4F4] pt-3.5">
@@ -555,17 +585,11 @@ export function ProjectsView() {
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <Input id="proj-start" label="Start date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
-            <Input id="proj-end" label="End date" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} required />
+            <Input id="proj-start" label="Start date (optional)" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            <Input id="proj-end" label="End date (optional)" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-[#3D3D3D]">Status</label>
-              <select value={status} onChange={(e) => setStatus(e.target.value)} className={SEL}>
-                {["Planning", "In Progress", "Review", "Completed"].map((s) => <option key={s}>{s}</option>)}
-              </select>
-            </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-[#3D3D3D]">Priority</label>
               <select value={priority} onChange={(e) => setPriority(e.target.value)} className={SEL}>
@@ -575,7 +599,7 @@ export function ProjectsView() {
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-[#3D3D3D]">Description</label>
+            <label className="mb-1.5 block text-sm font-medium text-[#3D3D3D]">Description (optional)</label>
             <MarkdownEditor value={desc} onChange={setDesc} placeholder="Describe the project goals and scope…" />
           </div>
 
@@ -587,37 +611,13 @@ export function ProjectsView() {
                 <span className="font-mono text-xs text-[#A0A0A0]">{selectedMembers.length} selected</span>
               )}
             </div>
-            <div className="grid max-h-40 grid-cols-1 gap-1.5 overflow-y-auto rounded-xl border border-[#E8E8E8] bg-[#F7F8FA] p-2">
-              {usersList.map((u) => {
-                const sel = selectedMembers.includes(u.id);
-                return (
-                  <button
-                    key={u.id}
-                    type="button"
-                    onClick={() => toggleMember(u.id)}
-                    className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${sel
-                      ? "bg-[#e8edfb] text-[#0038BC] ring-1 ring-inset ring-[#0038BC]/25"
-                      : "border border-[#E8E8E8] bg-white text-[#3D3D3D] hover:bg-[#F4F4F4]"
-                      }`}
-                  >
-                    <span
-                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${sel ? "bg-[#0038BC] text-white" : "bg-[#EEEEEE] text-[#737373]"
-                        }`}
-                    >
-                      {u.name.charAt(0).toUpperCase()}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{u.name}</span>
-                      <span className="text-xs text-[#737373]">{u.role}</span>
-                    </span>
-                    {sel && <Check className="h-3.5 w-3.5 shrink-0 text-[#0038BC]" />}
-                  </button>
-                );
-              })}
-              {usersList.length === 0 && (
-                <p className="px-2 py-3 text-center text-xs text-[#A0A0A0]">No approved members yet.</p>
-              )}
-            </div>
+            <AssigneePicker
+              users={usersList}
+              teams={teamsList}
+              selected={selectedMembers}
+              onChange={setSelectedMembers}
+              recentIds={workspaceRecentIds}
+            />
           </div>
 
           <div className="flex justify-end gap-3 border-t border-[#E8E8E8] pt-4">

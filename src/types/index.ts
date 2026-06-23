@@ -49,19 +49,21 @@ export interface ProjectFile {
   uploadedAt: string;
 }
 
+export type DerivedProjectStatus = "Ongoing" | "Done";
+
 export interface Project {
   id: string;
   name: string;
-  richTextDescription: string;
-  status: "Planning" | "In Progress" | "Review" | "Completed";
+  richTextDescription?: string;
   priority: "Low" | "Medium" | "High" | "Critical";
-  startDate: string;
-  endDate: string;
+  startDate?: string;
+  endDate?: string;
   coverImageUrl?: string;
   ownerId: string;
   tags: string[];
   members: string[];
   files: ProjectFile[];
+  recentAssignees?: string[];
   deleted?: boolean;
   deletedAt?: string;
 }
@@ -82,7 +84,6 @@ export interface TaskAssignee {
   teamId?: string;
 }
 
-/** A lightweight sub-task item stored inside a parent Task */
 export interface SubTask {
   id: string;
   title: string;
@@ -90,12 +91,20 @@ export interface SubTask {
   createdAt: string;
 }
 
+export interface TaskDependency {
+  id: string;
+  taskId?: string;
+  userId?: string;
+  teamId?: string;
+  note?: string;
+}
+
 export interface Task {
   id: string;
   projectId: string;
   projectName?: string;
   title: string;
-  richTextDesc: string;
+  richTextDesc?: string;
   status: "To Do" | "In Progress" | "Review" | "Done";
   priority: "Low" | "Medium" | "High" | "Critical";
   category: "Development" | "Design" | "QA" | "Management" | "Billing" | "Others";
@@ -104,7 +113,8 @@ export interface Task {
   assignees: TaskAssignee[];
   timeLogs: TimeLog[];
   subTasks?: SubTask[];
-  dependencies?: string[];
+  dependencies?: TaskDependency[];
+  legacyDependencies?: string[];
   deleted?: boolean;
   deletedAt?: string;
 }

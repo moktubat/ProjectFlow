@@ -8,6 +8,7 @@ import { MarkdownEditor } from "../editor/MarkdownEditor.js";
 import { TimePicker } from "../ui/TimePicker.js";
 import { SingleDatePicker } from "../ui/DateRangePicker.js";
 import { User, Team, Task, SubTask } from "../../types/index.js";
+import { AssigneePicker } from "../AssigneePicker.js";
 import {
   ArrowLeft, Users, Clock, MessageSquare, GitMerge, AlertCircle,
   HelpCircle, CheckSquare, Plus, Trash2, CheckCircle2, Circle,
@@ -391,6 +392,8 @@ export function TaskDetailsView({ taskId }: { taskId: string }) {
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [projTasks, setProjTasks] = useState<Task[]>([]);
+  const [recentAssignees, setRecentAssignees] = useState<string[]>([]);
+  const [depNoteDraft, setDepNoteDraft] = useState("");
 
   // Assign
   const [mentionInput, setMentionInput] = useState("");
@@ -420,7 +423,10 @@ export function TaskDetailsView({ taskId }: { taskId: string }) {
       fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
       fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
     ]).then(async ([u, t]) => {
-      if (u.ok) setUsers(await u.json());
+      if (u.ok) {
+        const all = await u.json();
+        setUsers(all.filter((x: User) => x.status === "APPROVED"));
+      }
       if (t.ok) setTeams(await t.json());
     });
   }, [token]);
@@ -430,6 +436,17 @@ export function TaskDetailsView({ taskId }: { taskId: string }) {
     fetch(`/api/tasks?projectId=${task.projectId}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : []))
       .then(setProjTasks);
+  }, [token, task?.projectId]);
+
+  useEffect(() => {
+    if (!token || !task?.projectId) return;
+    fetch(`/api/projects/${task.projectId}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((proj) => {
+        if (!proj) return;
+        setRecentAssignees(proj.recentAssignees ?? []);
+        setUsers((prev) => prev.filter((u) => proj.members?.includes(u.id)));
+      });
   }, [token, task?.projectId]);
 
   if (isLoading)
@@ -575,11 +592,15 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
     try { await updateTask({ assignees: list }); reloadTask(); } catch (e: any) { alert(e.message); }
   };
 
-  const toggleDep = async (depId: string) => {
-    const deps = (task.dependencies ?? []).includes(depId)
-      ? task.dependencies!.filter((d) => d !== depId)
-      : [...(task.dependencies ?? []), depId];
-    try { await updateTask({ dependencies: deps }); reloadTask(); } catch (e: any) { alert(e.message); }
+
+  const addPersonDependency = async (who: { userId?: string; teamId?: string }, note?: string) => {
+    const deps = [...(task.dependencies ?? []), { ...who, note: note || undefined }];
+    try { await updateTask({ dependencies: deps as any }); reloadTask(); } catch (e: any) { alert(e.message); }
+  };
+
+  const removeDependency = async (depId: string) => {
+    const deps = (task.dependencies ?? []).filter((d: any) => d.id !== depId);
+    try { await updateTask({ dependencies: deps as any }); reloadTask(); } catch (e: any) { alert(e.message); }
   };
 
   const handleComment = async (e: React.FormEvent) => {
@@ -908,22 +929,27 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                 <span className="font-medium text-[#111111]">email@co.com</span>
               </p>
             </div>
-            <form onSubmit={handleMentionAssign} className="flex gap-2 mb-3">
-              <input
-                value={mentionInput}
-                onChange={(e) => setMentionInput(e.target.value)}
-                placeholder="@user, @team, or email"
-                className="flex-1 px-2.5 py-1.5 border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:border-[#0038BC]"
-              />
-              <Button type="submit" variant="outline" size="sm">Assign</Button>
-            </form>
+            <AssigneePicker
+              users={users}
+              teams={teams}
+              selected={task.assignees}
+              onChange={async (next) => {
+                try {
+                  await updateTask({ assignees: next as any });
+                  reloadTask();
+                } catch (e: any) {
+                  setMentionResult({ ok: false, msg: e.message });
+                }
+              }}
+              recentIds={recentAssignees}
+            />
             {mentionResult && (
               <div className={`flex items-start gap-2 p-2 rounded-lg text-xs mb-3 ${mentionResult.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
                 <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 {mentionResult.msg}
               </div>
             )}
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 mt-1.5">
               {task.assignees.length > 0 ? (
                 task.assignees.map((a, i) => (
                   <div key={i} className="flex items-center justify-between p-2 bg-[#F7F8FA] border border-[#E8E8E8] rounded-lg">
@@ -947,18 +973,40 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
               <GitMerge className="w-3.5 h-3.5 text-[#737373]" />
               <p className="text-sm font-medium text-[#111111]">Dependencies</p>
             </div>
+
             {(task.dependencies ?? []).length > 0 ? (
               <div className="space-y-1.5 mb-3">
-                {task.dependencies!.map((depId) => {
-                  const dep = projTasks.find((t) => t.id === depId);
-                  if (!dep) return null;
-                  const done = dep.status === "Done";
+                {task.dependencies!.map((dep: any) => {
+                  if (dep.taskId) {
+                    const depTask = projTasks.find((t) => t.id === dep.taskId);
+                    if (!depTask) return null;
+                    const done = depTask.status === "Done";
+                    return (
+                      <div key={dep.id} className={`p-2 rounded-lg border text-sm ${done ? "bg-green-50 border-green-200" : "bg-[#fef3dc] border-[#EF8F00]/30"}`}>
+                        <div className="flex items-center justify-between">
+                          <button onClick={() => navigate(`tasks/${depTask.id}`)} className={`truncate text-left text-xs hover:underline ${done ? "text-green-700 line-through" : "text-[#111111]"}`}>
+                            {depTask.title}
+                          </button>
+                          <button onClick={() => removeDependency(dep.id)} className="text-xs text-red-600 hover:underline ml-2 shrink-0">Remove</button>
+                        </div>
+                        {dep.note && <p className="text-xs text-[#737373] mt-1 italic">{dep.note}</p>}
+                      </div>
+                    );
+                  }
+                  // person/team-type dependency
+                  const label = dep.userId ? getName(dep.userId) : `@${getTeamName(dep.teamId)}`;
+                  const isAssigned = dep.userId
+                    ? task.assignees.some((a) => a.userId === dep.userId)
+                    : task.assignees.some((a) => a.teamId === dep.teamId);
                   return (
-                    <div key={depId} className={`flex items-center justify-between p-2 rounded-lg border text-sm ${done ? "bg-green-50 border-green-200" : "bg-[#fef3dc] border-[#EF8F00]/30"}`}>
-                      <button onClick={() => navigate(`tasks/${dep.id}`)} className={`truncate text-left text-xs hover:underline ${done ? "text-green-700 line-through" : "text-[#111111]"}`}>
-                        {dep.title}
-                      </button>
-                      <button onClick={() => toggleDep(depId)} className="text-xs text-red-600 hover:underline ml-2 shrink-0">Remove</button>
+                    <div key={dep.id} className={`p-2 rounded-lg border text-sm ${isAssigned ? "bg-green-50 border-green-200" : "bg-[#fef3dc] border-[#EF8F00]/30"}`}>
+                      <div className="flex items-center justify-between">
+                        <span className={`truncate text-xs ${isAssigned ? "text-green-700 line-through" : "text-[#111111]"}`}>
+                          {label} {isAssigned ? "(assigned)" : "(not yet assigned)"}
+                        </span>
+                        <button onClick={() => removeDependency(dep.id)} className="text-xs text-red-600 hover:underline ml-2 shrink-0">Remove</button>
+                      </div>
+                      {dep.note && <p className="text-xs text-[#737373] mt-1 italic">{dep.note}</p>}
                     </div>
                   );
                 })}
@@ -966,28 +1014,22 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
             ) : (
               <p className="text-xs text-[#A0A0A0] mb-3">No dependencies.</p>
             )}
-            {projTasks.filter((t) => !t.deleted && t.id !== task.id && !(task.dependencies ?? []).includes(t.id)).length > 0 && (
-              <select
-                onChange={(e) => { if (e.target.value) { toggleDep(e.target.value); (e.target as any).value = ""; } }}
-                className="w-full px-2.5 py-1.5 border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:border-[#0038BC] bg-white"
-                defaultValue=""
-              >
-                <option value="">Add dependency…</option>
-                {projTasks.filter((t) => !t.deleted && t.id !== task.id && !(task.dependencies ?? []).includes(t.id)).map((t) => (
-                  <option key={t.id} value={t.id}>[{t.category}] {t.title}</option>
-                ))}
-              </select>
-            )}
-            {projTasks.filter((t) => !t.deleted && t.dependencies?.includes(task.id)).length > 0 && (
-              <div className="mt-3 pt-3 border-t border-[#E8E8E8]">
-                <p className="text-xs text-[#737373] mb-1.5">Blocked by this task:</p>
-                {projTasks.filter((t) => !t.deleted && t.dependencies?.includes(task.id)).map((t) => (
-                  <button key={t.id} onClick={() => navigate(`tasks/${t.id}`)} className="block text-xs text-[#0038BC] hover:underline truncate w-full text-left py-0.5">
-                    {t.title}
-                  </button>
-                ))}
-              </div>
-            )}
+
+            {/* Add new dependency */}
+            <p className="text-xs text-[#737373] mb-1.5">Add a person/team blocker:</p>
+            <AssigneePicker
+              users={users}
+              teams={teams}
+              selected={[]}
+              onChange={(next) => next.forEach((d) => addPersonDependency(d, depNoteDraft))}
+              recentIds={recentAssignees}
+            />
+            <input
+              value={depNoteDraft}
+              onChange={(e) => setDepNoteDraft(e.target.value)}
+              placeholder="Optional note for the next dependency you add…"
+              className="w-full mt-2 px-2.5 py-1.5 border border-[#D0D0D0] rounded-lg text-xs focus:outline-none focus:border-[#0038BC]"
+            />
           </div>
         </div>
       </div>

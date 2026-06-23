@@ -18,7 +18,7 @@ import { useDragDropBoard, BOARD_STATUSES } from "../../hooks/useDragDropBoard.j
 interface KanbanBoardProps {
   tasks: Task[];
   users: User[];
-  onTaskUpdated: () => void;
+  onTaskUpdated: (taskId?: string, newStatus?: string) => void;
 }
 
 export function KanbanBoard({ tasks, users, onTaskUpdated }: KanbanBoardProps) {

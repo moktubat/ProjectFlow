@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useProject } from "../../hooks/useProject.js";
 import { useTasks } from "../../hooks/useTasks.js";
 import { useUIStore } from "../../store/ui-store.js";
@@ -13,6 +13,8 @@ import { TaskListBoard } from "../tasklist/TaskListBoard.js";
 import { ProjectSprintAnalytics } from "../project/ProjectSprintAnalytics.js";
 import { DateRangePicker } from "../ui/DateRangePicker.js";
 import { User } from "../../types/index.js";
+import { AssigneePicker } from "../AssigneePicker.js";
+import { deriveProjectStatus } from "../../lib/project-status.js";
 import {
   Plus, Calendar, FileSpreadsheet, Trash2, Paperclip, Users,
   ArrowLeft, TrendingUp, Clock, Download, Settings, Link,
@@ -105,7 +107,7 @@ async function generateWithGemini(prompt: string, token: string | null): Promise
 
 export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const { project, isLoading: projLoading, error: projError, refresh: reloadProject, updateProject, deleteProject, uploadFile } = useProject(projectId);
-  const { tasks, isLoading: tasksLoading, refresh: reloadTasks } = useTasks(projectId);
+  const { tasks, isLoading: tasksLoading, refresh: reloadTasks, refreshSilent, updateTaskStatus } = useTasks(projectId);
   const token = useUIStore((s) => s.token);
   const navigate = useUIStore((s) => s.navigate);
 
@@ -146,8 +148,9 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const [tCat, setTCat] = useState<any>("Development");
   const [tDue, setTDue] = useState("");
   const [tEst, setTEst] = useState("");
-  const [tAsgn, setTAsgn] = useState<string[]>([]);
-  const [tDeps, setTDeps] = useState<string[]>([]);
+  const [tAsgn, setTAsgn] = useState<{ userId?: string; teamId?: string }[]>([]);
+  const [tDeps, setTDeps] = useState<{ taskId?: string; userId?: string; teamId?: string; note?: string }[]>([]);
+  const [depNote, setDepNote] = useState("");
   const [tErr, setTErr] = useState<string | null>(null);
   const [tBusy, setTBusy] = useState(false);
 
@@ -174,11 +177,22 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
       fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
       fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
     ]);
-    if (uRes.ok) setUsers((await uRes.json()).filter((u: User) => u.status === "APPROVED"));
+    if (uRes.ok) {
+      const allApproved = (await uRes.json()).filter((u: User) => u.status === "APPROVED");
+      setUsers(project ? allApproved.filter((u: User) => project.members?.includes(u.id)) : allApproved);
+    }
     if (tRes.ok) setTeams(await tRes.json());
   };
 
-  useEffect(() => { loadRoster(); }, [token]);
+  useEffect(() => { loadRoster(); }, [token, project?.members?.length]);
+
+  const handleBoardTaskUpdate = useCallback((taskId?: string, newStatus?: string) => {
+    if (taskId && newStatus) {
+      updateTaskStatus(taskId, newStatus);
+    } else {
+      refreshSilent();
+    }
+  }, [updateTaskStatus, refreshSilent]);
 
   if (projLoading) return (
     <div className="flex justify-center py-24">
@@ -196,6 +210,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
 
   const completedTasks = tasks.filter((t) => t.status === "Done").length;
   const progress = tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0;
+  const derivedStatus = deriveProjectStatus(tasks);
   const totalLogged = tasks.reduce((s, t) => s + t.timeLogs.reduce((a, l) => a + l.hours, 0), 0);
   const totalEst = tasks.reduce((s, t) => s + (t.estimatedHours ?? 0), 0);
 
@@ -275,14 +290,15 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
     if (!tTitle.trim() || !tDue) { setTErr("Title and due date are required."); return; }
     setTBusy(true); setTErr(null);
     try {
+      const depsWithNote = tDeps.map((d) => (depNote.trim() ? { ...d, note: depNote.trim() } : d));
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ projectId, title: tTitle, richTextDesc: DOMPurify.sanitize(tDesc), status: tStatus, priority: tPri, category: tCat, dueDate: tDue, estimatedHours: Number(tEst) || 0, assignees: tAsgn.map((id) => ({ userId: id })), dependencies: tDeps }),
+        body: JSON.stringify({ projectId, title: tTitle, richTextDesc: DOMPurify.sanitize(tDesc), status: tStatus, priority: tPri, category: tCat, dueDate: tDue, estimatedHours: Number(tEst) || 0, assignees: tAsgn, dependencies: depsWithNote }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
       setTaskPanel(false);
-      setTTitle(""); setTDesc(""); setTDue(""); setTEst(""); setTAsgn([]); setTDeps([]);
+      setTTitle(""); setTDesc(""); setTDue(""); setTEst(""); setTAsgn([]); setTDeps([]); setDepNote("");
       reloadTasks();
     } catch (e: any) { setTErr(e.message); }
     finally { setTBusy(false); }
@@ -427,6 +443,15 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              <span
+                className={`flex items-center gap-1.5 text-xs font-medium rounded-lg px-2.5 py-1 border ${derivedStatus === "Done"
+                  ? "bg-emerald-500/20 border-emerald-300/40 text-emerald-50"
+                  : "bg-white/10 border-white/20 text-white"
+                  }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${derivedStatus === "Done" ? "bg-emerald-300" : "bg-[#5B8DEF] motion-safe:animate-pulse"}`} />
+                {derivedStatus}
+              </span>
               <Button onClick={exportCSV} variant="outline" size="sm" className="bg-white/10 border-white/20 text-white hover:bg-white/20">
                 <FileSpreadsheet className="w-3.5 h-3.5" /> Export CSV
               </Button>
@@ -633,14 +658,20 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           </div>
         </div>
         <div className="p-4">
-          {tasksLoading ? (
+          {tasksLoading && tasks.length === 0 ? (
             <div className="flex justify-center py-12">
               <div className="w-6 h-6 border-2 border-[#0038BC] border-t-transparent rounded-full animate-spin" />
             </div>
           ) : (
             <>
-              {viewMode === "kanban" && <KanbanBoard tasks={tasks} users={users} onTaskUpdated={() => reloadTasks()} />}
-              {viewMode === "list" && <TaskListBoard tasks={tasks} users={users} onTaskUpdated={() => reloadTasks()} />}
+              {viewMode === "kanban" && (
+                <KanbanBoard
+                  tasks={tasks}
+                  users={users}
+                  onTaskUpdated={handleBoardTaskUpdate}
+                />
+              )}
+              {viewMode === "list" && <TaskListBoard tasks={tasks} users={users} onTaskUpdated={handleBoardTaskUpdate} />}
               {viewMode === "analytics" && <ProjectSprintAnalytics tasks={tasks} users={users} project={project} />}
             </>
           )}
@@ -682,40 +713,32 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           </div>
           <div>
             <label className="block text-xs text-[#737373] mb-1.5">Assignees</label>
-            <div className="max-h-36 overflow-y-auto border border-[#E8E8E8] rounded-lg p-2 grid grid-cols-1 gap-1.5 bg-[#F7F8FA]">
-              {users.map((u) => {
-                const sel = tAsgn.includes(u.id);
-                return (
-                  <button key={u.id} type="button" onClick={() => setTAsgn((p) => sel ? p.filter((x) => x !== u.id) : [...p, u.id])}
-                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm text-left border transition-colors ${sel ? "bg-[#e8edfb] border-[#0038BC]/20 text-[#0038BC]" : "bg-white border-[#E8E8E8] text-[#525252] hover:bg-[#F4F4F4]"}`}>
-                    <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${sel ? "bg-[#0038BC] border-[#0038BC]" : "border-[#D0D0D0]"}`}>
-                      {sel && <svg className="w-2 h-2 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
-                    </div>
-                    <span className="text-xs">{u.name}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <AssigneePicker
+              users={users}
+              teams={teams}
+              selected={tAsgn.map((id) => ({ userId: id }))}
+              onChange={(next) => setTAsgn(next as any)}
+              recentIds={project.recentAssignees}
+            />
           </div>
-          {tasks.filter((t) => !t.deleted).length > 0 && (
-            <div>
-              <label className="block text-xs text-[#737373] mb-1.5">Dependencies</label>
-              <div className="max-h-28 overflow-y-auto border border-[#E8E8E8] rounded-lg p-2 grid grid-cols-1 gap-1.5 bg-[#F7F8FA]">
-                {tasks.filter((t) => !t.deleted).map((t) => {
-                  const sel = tDeps.includes(t.id);
-                  return (
-                    <button key={t.id} type="button" onClick={() => setTDeps((p) => sel ? p.filter((x) => x !== t.id) : [...p, t.id])}
-                      className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left border transition-colors ${sel ? "bg-[#fef3dc] border-[#EF8F00]/20" : "bg-white border-[#E8E8E8] hover:bg-[#F4F4F4]"}`}>
-                      <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${sel ? "bg-[#EF8F00] border-[#EF8F00]" : "border-[#D0D0D0]"}`}>
-                        {sel && <svg className="w-2 h-2 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
-                      </div>
-                      <span className="truncate">{t.title}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          <div>
+            <label className="block text-xs text-[#737373] mb-1.5">Dependencies (person/team blockers)</label>
+            <AssigneePicker
+              users={users}
+              teams={teams}
+              selected={tDeps.map((d) => ({ userId: d.userId, teamId: d.teamId }))}
+              onChange={(next) => setTDeps(next.map((n) => ({ ...n, note: depNote.trim() || undefined })))}
+              recentIds={project.recentAssignees}
+            />
+            {tDeps.length > 0 && (
+              <input
+                value={depNote}
+                onChange={(e) => setDepNote(e.target.value)}
+                placeholder="Optional note — why is this blocked?"
+                className="w-full mt-2 px-3 py-2 border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:border-[#0038BC]"
+              />
+            )}
+          </div>
           <div className="flex justify-end gap-2 pt-2 border-t border-[#E8E8E8]">
             <Button type="button" variant="outline" onClick={() => setTaskPanel(false)}>Cancel</Button>
             <Button type="submit" variant="primary" isLoading={tBusy}>Create task</Button>
