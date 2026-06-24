@@ -1,23 +1,9 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * Global fetch interceptor — ensures 401 on any /api/ call
- * triggers a client-side logout. 403 is intentionally passed
- * through so the UI can show "access denied" for valid sessions.
- *
- * Applied once at app startup via side-effect import.
- */
-
 import { useUIStore } from "../store/ui-store.js";
-
-// ─── Guard against double-init and logout storms ──────────────────────────────
 
 let intercepting = false;
 let loggingOut = false;
 
-// ─── Core logout logic (idempotent) ───────────────────────────────────────────
-
+// ─── Core logout logic (idempotent) ──────
 function handleAuthFailure(status: number, url: string): void {
     if (loggingOut) return;
     loggingOut = true;
@@ -39,7 +25,7 @@ function handleAuthFailure(status: number, url: string): void {
     }, 2000);
 }
 
-// ─── Should this URL be intercepted? ──────────────────────────────────────────
+// ─── Should this URL be intercepted? ─────
 
 function isApiUrl(input: RequestInfo | URL): boolean {
     const url = typeof input === "string"
@@ -52,7 +38,7 @@ function isApiUrl(input: RequestInfo | URL): boolean {
     return url.startsWith("/api/") || url.includes("/api/");
 }
 
-// ─── The interceptor ──────────────────────────────────────────────────────────
+// ─── The interceptor ─────
 
 function interceptedFetch(
     input: RequestInfo | URL,
@@ -73,7 +59,7 @@ function interceptedFetch(
     });
 }
 
-// ─── Stash original & install ─────────────────────────────────────────────────
+// ─── Stash original & install ────────────
 
 const originalFetch = window.fetch;
 
@@ -81,12 +67,4 @@ export function installFetchInterceptor(): void {
     if (intercepting) return;
     intercepting = true;
     window.fetch = interceptedFetch;
-}
-
-
-export async function authFetch(
-    url: string,
-    options: RequestInit = {}
-): Promise<Response> {
-    return fetch(url, options);
 }

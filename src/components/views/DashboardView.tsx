@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useEffect, useState } from "react";
 import { useUIStore } from "../../store/ui-store.js";
 import { usePageTitle } from "../../hooks/usePageTitle.js";
@@ -12,6 +7,7 @@ import {
   FolderKanban, CheckSquare, Clock, AlertCircle,
   Calendar, Users, ArrowRight, TrendingUp
 } from "lucide-react";
+import { TASK_STATUS_STYLES } from "@/src/lib/badge-styles.js";
 
 function StatCard({
   label, value, sub, icon: Icon, accent = false,
@@ -79,13 +75,6 @@ export function DashboardView() {
 
   const workloadCounts: Record<string, number> = {};
   tasks.forEach((t) => t.assignees.forEach((a) => { if (a.userId) workloadCounts[a.userId] = (workloadCounts[a.userId] || 0) + 1; }));
-
-  const priorityBadge: Record<string, string> = {
-    Critical: "bg-red-50 text-red-700 border border-red-200",
-    High: "bg-orange-50 text-orange-700 border border-orange-200",
-    Medium: "bg-[#fef3dc] text-[#9a5b00] border border-[#EF8F00]/20",
-    Low: "bg-[#F4F4F4] text-[#737373] border border-[#E8E8E8]",
-  };
 
   const statusBadge: Record<string, string> = {
     Done: "bg-green-50 text-green-700",
@@ -157,7 +146,7 @@ export function DashboardView() {
                       {t.category} · Due {t.dueDate}
                     </p>
                   </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-md whitespace-nowrap shrink-0 ${priorityBadge[t.priority] || "bg-[#F4F4F4] text-[#737373]"}`}>
+                  <span className={`text-xs px-2 py-0.5 rounded-md whitespace-nowrap shrink-0 ${TASK_STATUS_STYLES[t.priority] || "bg-[#F4F4F4] text-[#737373]"}`}>
                     {t.priority}
                   </span>
                 </div>

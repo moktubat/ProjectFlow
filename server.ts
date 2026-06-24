@@ -522,14 +522,23 @@ async function buildApp() {
 
   // ─── Projects ──────
   app.get("/api/projects", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
     const projects = await dbStore.getProjects();
-    res.json(projects);
+    const visible = isManagerRole(caller.role)
+      ? projects
+      : projects.filter((p) => isMemberOrManager(caller, p));
+    res.json(visible);
   });
 
   app.get("/api/projects/:id", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
     const project = await dbStore.getProjectById(req.params.id);
     if (!project) {
       res.status(404).json({ error: "Project not found." });
+      return;
+    }
+    if (!isMemberOrManager(caller, project)) {
+      res.status(403).json({ error: "You don't have access to this project." });
       return;
     }
     res.json(project);
@@ -644,10 +653,15 @@ async function buildApp() {
 
   // Mentions autocomplete
   app.get("/api/projects/:id/mentionable", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
     const q = (req.query.q || "").toString().toLowerCase();
     const project = await dbStore.getProjectById(req.params.id);
     if (!project) {
       res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    if (!isMemberOrManager(caller, project)) {
+      res.status(403).json({ error: "You don't have access to this project." });
       return;
     }
 
@@ -710,29 +724,58 @@ async function buildApp() {
 
   // ─── Tasks ───────────────────────────────────────────────────────────────────
   app.get("/api/tasks", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
     const { projectId } = req.query;
+
+    if (projectId) {
+      const project = await dbStore.getProjectById(String(projectId));
+      if (!project) {
+        res.status(404).json({ error: "Project not found." });
+        return;
+      }
+      if (!isMemberOrManager(caller, project)) {
+        res.status(403).json({ error: "You don't have access to this project." });
+        return;
+      }
+    }
+
     const tasks = await dbStore.getTasks(projectId ? String(projectId) : undefined);
 
     const projectIds = [...new Set(tasks.map(t => t.projectId))];
-    const projectMap: Record<string, string> = {};
+    const projectMap: Record<string, any> = {};
     await Promise.all(
       projectIds.map(async id => {
         const proj = await dbStore.getProjectById(id);
-        projectMap[id] = proj ? proj.name : "Unknown Project";
+        projectMap[id] = proj;
       })
     );
 
-    res.json(tasks.map(t => ({ ...t, projectName: projectMap[t.projectId] ?? "Unknown Project" })));
+    const visibleTasks = isManagerRole(caller.role)
+      ? tasks
+      : tasks.filter((t) => {
+        const proj = projectMap[t.projectId];
+        return proj && isMemberOrManager(caller, proj);
+      });
+
+    res.json(visibleTasks.map(t => ({
+      ...t,
+      projectName: projectMap[t.projectId]?.name ?? "Unknown Project",
+    })));
   });
 
   app.get("/api/tasks/:id", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
     const task = await dbStore.getTaskById(req.params.id);
     if (!task) {
       res.status(404).json({ error: "Task not found." });
       return;
     }
     const proj = await dbStore.getProjectById(task.projectId);
-    res.json({ ...task, projectName: proj ? proj.name : "Unknown Project" });
+    if (!proj || !isMemberOrManager(caller, proj)) {
+      res.status(403).json({ error: "You don't have access to this task." });
+      return;
+    }
+    res.json({ ...task, projectName: proj.name });
   });
 
   app.post("/api/tasks", authenticateUser, async (req, res) => {
@@ -1384,6 +1427,16 @@ async function buildApp() {
 
   // ─── Activities ────
   app.get("/api/projects/:id/activities", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    const project = await dbStore.getProjectById(req.params.id);
+    if (!project) {
+      res.status(404).json({ error: "Project not found." });
+      return;
+    }
+    if (!isMemberOrManager(caller, project)) {
+      res.status(403).json({ error: "You don't have access to this project." });
+      return;
+    }
     try {
       const activities = await dbStore.getActivities(req.params.id);
       res.json(activities);

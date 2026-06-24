@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useEffect } from "react";
 import { useTasks } from "../../hooks/useTasks.js";
 import { useProjects } from "../../hooks/useProjects.js";
@@ -13,19 +8,7 @@ import { SlidePanel } from "../ui/SlidePanel.js";
 import { Input } from "../ui/Input.js";
 import { MarkdownEditor } from "../editor/MarkdownEditor.js";
 import { CheckSquare, Calendar, Clock, Filter, Plus, AlertCircle } from "lucide-react";
-
-const PRIORITY_BADGE: Record<string, string> = {
-  Low: "bg-[#F4F4F4] text-[#737373]",
-  Medium: "bg-[#fef3dc] text-[#9a5b00]",
-  High: "bg-orange-50 text-orange-700",
-  Critical: "bg-red-50 text-red-700",
-};
-const STATUS_BADGE: Record<string, string> = {
-  "To Do": "bg-[#F4F4F4] text-[#737373]",
-  "In Progress": "bg-[#e8edfb] text-[#0038BC]",
-  Review: "bg-[#fef3dc] text-[#9a5b00]",
-  Done: "bg-green-50 text-green-700",
-};
+import { CATEGORY_STYLES, PRIORITY_STYLES } from "@/src/lib/badge-styles.js";
 
 export function TasksListView() {
   usePageTitle("My Tasks", "View and manage all your tasks across every project in ProjectFlow.");
@@ -180,11 +163,11 @@ export function TasksListView() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className={`text-xs px-2 py-0.5 rounded-md ${PRIORITY_BADGE[t.priority] || "bg-[#F4F4F4] text-[#737373]"}`}>
+                  <span className={`text-xs px-2 py-0.5 rounded-md ${PRIORITY_STYLES[t.priority] || "bg-[#F4F4F4] text-[#737373]"}`}>
                     {t.priority}
                   </span>
-                  <span className={`text-xs px-2 py-0.5 rounded-md ${STATUS_BADGE[t.status] || "bg-[#F4F4F4] text-[#737373]"}`}>
-                    {t.status}
+                  <span className={`text-xs px-2 py-0.5 rounded-md ${CATEGORY_STYLES[t.category] || "bg-[#F4F4F4] text-[#737373]"}`}>
+                    {t.category}
                   </span>
                 </div>
               </button>

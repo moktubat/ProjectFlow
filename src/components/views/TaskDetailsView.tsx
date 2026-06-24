@@ -15,19 +15,7 @@ import {
   Pencil, Check, X, Sparkles, Send,
 } from "lucide-react";
 import DOMPurify from "dompurify";
-
-// ─── Gemini helper ────────────────────────────────────────────────────────────
-async function geminiGenerate(prompt: string, token: string | null): Promise<string> {
-  if (!token) throw new Error("You must be signed in to use AI generation.");
-  const res = await fetch("/api/ai/generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ prompt }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `AI generation failed (${res.status}).`);
-  return DOMPurify.sanitize(data.text ?? "");
-}
+import { generateWithGemini } from "@/src/lib/ai-generate.js";
 
 // ─── Inline-editable title ────────────────────────────────────────────────────
 function EditableTitle({
@@ -147,7 +135,7 @@ function SubTaskList({
     setAiGenerating(true);
     try {
       const existingTitles = subTasks.map((s) => `- ${s.title}`).join("\n");
-      const text = await geminiGenerate(
+      const text = await generateWithGemini(
         `Given these existing sub-tasks for a software development task:\n${existingTitles || "(none yet)"}\n\nSuggest 5 concise, actionable sub-tasks (each under 8 words). Return ONLY a plain list, one per line, no numbers or bullets.`,
         token
       );
@@ -493,7 +481,7 @@ export function TaskDetailsView({ taskId }: { taskId: string }) {
   const handleAiDesc = async () => {
     setAiDescGenerating(true);
     try {
-      const text = await geminiGenerate(
+      const text = await generateWithGemini(
         `Write a clear, concise task description for a software development task:
 Task title: "${task.title}"
 Category: ${task.category}
@@ -696,7 +684,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                         setEditingDesc(true);
                         setAiDescGenerating(true);
                         try {
-                          const t = await geminiGenerate(
+                          const t = await generateWithGemini(
                             `Write a task description for: "${task.title}" (${task.category}, ${task.priority} priority). 2 paragraphs, plain text.`,
                             token
                           );

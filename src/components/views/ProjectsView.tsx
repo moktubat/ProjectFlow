@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { deriveProjectStatus, DerivedProjectStatus } from "../../lib/project-status.js";
 import { AssigneePicker } from "../AssigneePicker.js";
+import { uploadFileToCloudinary } from "@/src/lib/cloudinary-upload.js";
 
 const FALLBACK_COVER =
   "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?auto=format&fit=crop&q=80&w=600";
@@ -210,19 +211,7 @@ export function ProjectsView() {
     setIsUploading(true);
     setCloudinaryError(null);
     try {
-      const reader = new FileReader();
-      const b64 = await new Promise<string>((res, rej) => {
-        reader.onload = () => res(reader.result as string);
-        reader.onerror = rej;
-        reader.readAsDataURL(file);
-      });
-      const r = await fetch("/api/cloudinary/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ base64Data: b64, filename: file.name }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error);
+      const data = await uploadFileToCloudinary(file, token);
       setCoverUrl(data.url);
       if (data.simulated) setCloudinaryError("Simulation mode — placeholder image assigned.");
     } catch (err: any) {

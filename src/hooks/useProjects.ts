@@ -1,68 +1,53 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import { useState, useEffect, useCallback } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Project } from "../types/index.js";
 import { useUIStore } from "../store/ui-store.js";
 
 export function useProjects() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const token = useUIStore((state) => state.token);
+  const queryClient = useQueryClient();
 
-  const fetchProjects = useCallback(async () => {
-    if (!token) return;
-    setIsLoading(true);
-    setError(null);
-    try {
+  const query = useQuery<Project[]>({
+    queryKey: ["projects"],
+    queryFn: async () => {
       const res = await fetch("/api/projects", {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const errObj = await res.json().catch(() => ({}));
         throw new Error(errObj.error || "Failed to load projects.");
       }
+      return res.json();
+    },
+    enabled: !!token,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (projectData: Partial<Project>) => {
+      if (!token) throw new Error("Authentication required.");
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(projectData),
+      });
       const data = await res.json();
-      setProjects(data);
-    } catch (err: any) {
-      setError(err.message || "An unexpected error occurred");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [token]);
-
-  const createProject = async (projectData: Partial<Project>) => {
-    if (!token) throw new Error("Authentication required.");
-    const res = await fetch("/api/projects", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify(projectData)
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || "Failed to create project.");
-    }
-    await fetchProjects();
-    return data;
-  };
-
-  useEffect(() => {
-    fetchProjects();
-  }, [fetchProjects]);
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to create project.");
+      }
+      return data;
+    },
+    onSuccess: () => {
+      return queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
 
   return {
-    projects,
-    isLoading,
-    error,
-    refresh: fetchProjects,
-    createProject
+    projects: query.data ?? [],
+    isLoading: query.isLoading,
+    error: query.error?.message ?? null,
+    refresh: query.refetch,
+    createProject: createMutation.mutateAsync,
   };
 }

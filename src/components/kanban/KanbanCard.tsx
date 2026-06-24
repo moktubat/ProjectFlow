@@ -9,28 +9,13 @@ import { CSS } from "@dnd-kit/utilities";
 import { Task, User } from "../../types/index.js";
 import { useUIStore } from "../../store/ui-store.js";
 import { Clock, Calendar, GitMerge } from "lucide-react";
+import { CATEGORY_STYLES, PRIORITY_STYLES } from "@/src/lib/badge-styles.js";
 
 interface KanbanCardProps {
   task: Task;
   users: User[];
   isDragOverlay?: boolean;
 }
-
-const PRIORITY_STYLES: Record<string, string> = {
-  Low:      "bg-[#F4F4F4] text-[#737373]",
-  Medium:   "bg-[#fef3dc] text-[#9a5b00]",
-  High:     "bg-orange-50 text-orange-700",
-  Critical: "bg-red-50 text-red-700",
-};
-
-const CATEGORY_STYLES: Record<string, string> = {
-  Development: "bg-emerald-50 text-emerald-700",
-  Design:      "bg-purple-50 text-purple-700",
-  QA:          "bg-cyan-50 text-cyan-700",
-  Management:  "bg-indigo-50 text-indigo-700",
-  Billing:     "bg-amber-50 text-amber-700",
-  Others:      "bg-[#F4F4F4] text-[#737373]",
-};
 
 export function KanbanCard({ task, users, isDragOverlay = false }: KanbanCardProps) {
   const navigate = useUIStore((s) => s.navigate);
@@ -49,7 +34,6 @@ export function KanbanCard({ task, users, isDragOverlay = false }: KanbanCardPro
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.35 : 1,
-    // Prevent layout shift while dragging
     zIndex: isDragging ? 999 : undefined,
   };
 
@@ -59,8 +43,6 @@ export function KanbanCard({ task, users, isDragOverlay = false }: KanbanCardPro
     users.find((u) => u.id === id)?.name ?? "Unknown";
 
   const handleClick = (e: React.MouseEvent) => {
-    // Don't navigate if this was actually a drag (isDragging flag may lag by one frame,
-    // so we check pointer-events style set by DnD library)
     if (!isDragging && !isDragOverlay) {
       navigate(`tasks/${task.id}`);
     }

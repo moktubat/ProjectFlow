@@ -10,6 +10,14 @@ interface MarkdownEditorProps {
   projectId?: string;
 }
 
+function renderInlineMarkdown(line: string): string {
+  return line
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+    .replace(/`(.*?)`/g, "<code class='bg-[#F4F4F4] px-1 rounded text-xs font-mono'>$1</code>")
+    .replace(/\[(.*?)\]\((.*?)\)/g, "<a href='$2' class='text-[#0038BC] underline'>$1</a>");
+}
+
 export function MarkdownEditor({ value, onChange, placeholder = "Write something...", projectId }: MarkdownEditorProps) {
   const [isPreview, setIsPreview] = useState(false);
   const [showMention, setShowMention] = useState(false);
@@ -108,11 +116,7 @@ export function MarkdownEditor({ value, onChange, placeholder = "Write something
         ) : (
           <div className="min-h-[100px] px-3 py-2.5 text-sm text-[#525252] prose prose-sm max-w-none">
             {value.trim() ? value.split("\n").map((line, i) => {
-              const html = line
-                .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-                .replace(/\*(.*?)\*/g, "<em>$1</em>")
-                .replace(/`(.*?)`/g, "<code class='bg-[#F4F4F4] px-1 rounded text-xs font-mono'>$1</code>")
-                .replace(/\[(.*?)\]\((.*?)\)/g, "<a href='$2' class='text-[#0038BC] underline'>$1</a>");
+              const html = renderInlineMarkdown(line);
               if (line.startsWith("# ")) return <h3 key={i} className="font-semibold text-[#111111]">{line.slice(2)}</h3>;
               if (line.startsWith("- ")) return <li key={i} className="ml-4 list-disc">{line.slice(2)}</li>;
               return <p key={i} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }} />;

@@ -21,6 +21,8 @@ import {
   Copy, Check, AlertCircle, Pencil, X, Sparkles, ImageIcon, Save,
 } from "lucide-react";
 import DOMPurify from "dompurify";
+import { uploadFileToCloudinary } from "@/src/lib/cloudinary-upload.js";
+import { generateWithGemini } from "@/src/lib/ai-generate.js";
 
 const SEL = "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:border-[#0038BC] focus:ring-2 focus:ring-[#0038BC]/10";
 
@@ -87,22 +89,6 @@ function InlineEditText({
       <Pencil className="w-3.5 h-3.5 text-white/50 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5" />
     </div>
   );
-}
-
-// ─── Gemini AI description generator ─────────────────────────────────────────
-async function generateWithGemini(prompt: string, token: string | null): Promise<string> {
-  if (!token) throw new Error("You must be signed in to use AI generation.");
-  const res = await fetch("/api/ai/generate", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ prompt }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `AI generation failed (${res.status}).`);
-  return DOMPurify.sanitize(data.text ?? "");
 }
 
 export function ProjectDetailsView({ projectId }: { projectId: string }) {
@@ -270,10 +256,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
   const uploadCoverToCloudinary = async (file: File) => {
     setCoverUploading(true);
     try {
-      const b64 = await new Promise<string>((ok, rej) => { const r = new FileReader(); r.onload = () => ok(r.result as string); r.onerror = rej; r.readAsDataURL(file); });
-      const res = await fetch("/api/cloudinary/upload", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ base64Data: b64, filename: file.name }) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await uploadFileToCloudinary(file, token);
       setCoverDraft(data.url);
     } catch (e: any) { alert(e.message); }
     finally { setCoverUploading(false); }
@@ -305,12 +288,11 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
   };
 
   const uploadToCloudinary = async (file: File) => {
-    setUploading(true); setUploadErr(null); setFName(file.name);
+    setUploading(true);
+    setUploadErr(null);
+    setFName(file.name);
     try {
-      const b64 = await new Promise<string>((ok, rej) => { const r = new FileReader(); r.onload = () => ok(r.result as string); r.onerror = rej; r.readAsDataURL(file); });
-      const res = await fetch("/api/cloudinary/upload", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ base64Data: b64, filename: file.name }) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await uploadFileToCloudinary(file, token);
       setFUrl(data.url);
       if (data.simulated) setUploadErr("Simulation mode — placeholder URL set.");
     } catch (e: any) { setUploadErr(e.message); }
