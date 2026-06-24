@@ -164,7 +164,8 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
       fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
     ]);
     if (uRes.ok) {
-      const allApproved = (await uRes.json()).filter((u: User) => u.status === "APPROVED");
+      const j = await uRes.json();
+      const allApproved = (j.data ?? j).filter((u: User) => u.status === "APPROVED");
       setUsers(project ? allApproved.filter((u: User) => project.members?.includes(u.id)) : allApproved);
     }
     if (tRes.ok) setTeams(await tRes.json());

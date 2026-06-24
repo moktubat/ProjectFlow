@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useUIStore } from "../../store/ui-store.js";
 import { Button } from "../ui/Button.js";
 import { Bell, Briefcase, BookmarkCheck, Calendar } from "lucide-react";
+import { Pagination } from "../ui/Pagination.js";
 
 export function NotificationsView() {
   const token = useUIStore((s) => s.token);
@@ -9,18 +10,26 @@ export function NotificationsView() {
   const setNotifications = useUIStore((s) => s.setNotifications);
   const navigate = useUIStore((s) => s.navigate);
   const [isLoading, setIsLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
 
   // Only fetches explicitly on user action (mark read), not on mount
   const fetchNotifications = async () => {
     if (!token) return;
     setIsLoading(true);
     try {
-      const res = await fetch("/api/notifications", { headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) setNotifications(await res.json());
+      const res = await fetch(`/api/notifications?page=${page}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const json = await res.json();
+        setNotifications(json.data ?? json);
+        setTotalPages(json.pagination?.totalPages ?? 1);
+      }
     } finally {
       setIsLoading(false);
     }
   };
+
+  useEffect(() => { fetchNotifications(); }, [token, page]);
 
   const markRead = async (id: string, projectId?: string) => {
     if (!token) return;
@@ -105,6 +114,7 @@ export function NotificationsView() {
           </div>
         )}
       </div>
+      <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
     </div>
   );
 }

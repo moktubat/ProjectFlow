@@ -412,17 +412,25 @@ export function TaskDetailsView({ taskId }: { taskId: string }) {
       fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
     ]).then(async ([u, t]) => {
       if (u.ok) {
-        const all = await u.json();
+        const j = await u.json();
+        const all = j.data ?? j;
         setUsers(all.filter((x: User) => x.status === "APPROVED"));
       }
-      if (t.ok) setTeams(await t.json());
+      if (t.ok) {
+        const j = await t.json();
+        setTeams(j.data ?? j);
+      }
     });
   }, [token]);
 
   useEffect(() => {
     if (!token || !task?.projectId) return;
     fetch(`/api/tasks?projectId=${task.projectId}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => (r.ok ? r.json() : []))
+      .then(async (r) => {
+        if (!r.ok) return [];
+        const j = await r.json();
+        return j.data ?? j;
+      })
       .then(setProjTasks);
   }, [token, task?.projectId]);
 

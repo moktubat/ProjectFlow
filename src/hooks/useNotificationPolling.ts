@@ -15,7 +15,8 @@ export function useNotificationPolling() {
                 headers: { Authorization: `Bearer ${token}` },
             });
             if (res.ok) {
-                setNotifications(await res.json());
+                const json = await res.json();
+                setNotifications(json.data ?? json);
             }
         } catch {
         }

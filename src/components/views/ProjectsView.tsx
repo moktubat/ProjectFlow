@@ -145,12 +145,13 @@ export function ProjectsView() {
       fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
       fetch("/api/workspace/recent-assignees", { headers: { Authorization: `Bearer ${token}` } }),
     ])
-      .then(async ([uRes, tRes, teamRes, recentRes]) => [
-        uRes.ok ? await uRes.json() : [],
-        tRes.ok ? await tRes.json() : [],
-        teamRes.ok ? await teamRes.json() : [],
-        recentRes.ok ? await recentRes.json() : { recentAssignees: [] },
-      ])
+      .then(async ([uRes, tRes, teamRes, recentRes]) => {
+        const uJ = uRes.ok ? await uRes.json() : [];
+        const tJ = tRes.ok ? await tRes.json() : [];
+        const teamJ = teamRes.ok ? await teamRes.json() : [];
+        const recentJ = recentRes.ok ? await recentRes.json() : { recentAssignees: [] };
+        return [uJ.data ?? uJ, tJ.data ?? tJ, teamJ, recentJ];
+      })
       .then(([userData, taskData, teamData, recentData]) => {
         setUsersList(userData.filter((u: User) => u.status === UserStatus.APPROVED));
         setAllTasks(taskData);

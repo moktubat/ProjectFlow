@@ -16,7 +16,8 @@ export function useTasks(projectId?: string) {
         const errObj = await res.json().catch(() => ({}));
         throw new Error(errObj.error || "Failed to load tasks.");
       }
-      return res.json();
+      const json = await res.json();
+      return json.data ?? json;
     },
     enabled: !!token,
   });

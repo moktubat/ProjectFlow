@@ -385,23 +385,25 @@ async function buildApp() {
     res.json({ success: true });
   });
 
+  app.post("/api/auth/logout-all", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    await dbStore.deleteSessionsForUser(caller.id);
+    res.json({ success: true, message: "Logged out from all devices." });
+  });
+
   app.get("/api/auth/session", authenticateUser, async (req, res) => {
     res.json({ user: (req as any).user });
   });
 
   // ─── Users ─────
   app.get("/api/users", authenticateUser, async (req, res) => {
-    const users = await dbStore.getUsers();
-    res.json(users.map(u => ({
-      id: u.id,
-      name: u.name,
-      username: u.username,
-      email: u.email,
-      role: u.role,
-      status: u.status,
-      teamId: u.teamId,
-      createdAt: u.createdAt,
-    })));
+    const { page, limit, skip } = getPagination(req.query);
+    const allUsers = await dbStore.getUsers();
+    const paginated = allUsers.slice(skip, skip + limit);
+    res.json({
+      data: paginated.map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email, role: u.role, status: u.status, teamId: u.teamId, createdAt: u.createdAt })),
+      pagination: { page, limit, total: allUsers.length, totalPages: Math.ceil(allUsers.length / limit) }
+    });
   });
 
   app.put("/api/users/:id/status", authenticateUser, async (req, res) => {
@@ -723,44 +725,38 @@ async function buildApp() {
   });
 
   // ─── Tasks ───────────────────────────────────────────────────────────────────
+  function getPagination(query: any) {
+    const page = Math.max(1, parseInt(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 50));
+    return { page, limit, skip: (page - 1) * limit };
+  }
+
   app.get("/api/tasks", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
     const { projectId } = req.query;
-
     if (projectId) {
       const project = await dbStore.getProjectById(String(projectId));
-      if (!project) {
-        res.status(404).json({ error: "Project not found." });
-        return;
-      }
-      if (!isMemberOrManager(caller, project)) {
-        res.status(403).json({ error: "You don't have access to this project." });
-        return;
-      }
+      if (!project) return res.status(404).json({ error: "Project not found." });
+      if (!isMemberOrManager(caller, project)) return res.status(403).json({ error: "You don't have access to this project." });
     }
 
     const tasks = await dbStore.getTasks(projectId ? String(projectId) : undefined);
-
     const projectIds = [...new Set(tasks.map(t => t.projectId))];
     const projectMap: Record<string, any> = {};
-    await Promise.all(
-      projectIds.map(async id => {
-        const proj = await dbStore.getProjectById(id);
-        projectMap[id] = proj;
-      })
-    );
+    await Promise.all(projectIds.map(async id => { projectMap[id] = await dbStore.getProjectById(id); }));
 
-    const visibleTasks = isManagerRole(caller.role)
-      ? tasks
-      : tasks.filter((t) => {
-        const proj = projectMap[t.projectId];
-        return proj && isMemberOrManager(caller, proj);
-      });
+    const visibleTasks = tasks.filter((t) => {
+      const proj = projectMap[t.projectId];
+      return proj && isMemberOrManager(caller, proj);
+    });
 
-    res.json(visibleTasks.map(t => ({
-      ...t,
-      projectName: projectMap[t.projectId]?.name ?? "Unknown Project",
-    })));
+    const { page, limit, skip } = getPagination(req.query);
+    const paginated = visibleTasks.slice(skip, skip + limit);
+
+    res.json({
+      data: paginated.map(t => ({ ...t, projectName: projectMap[t.projectId]?.name ?? "Unknown Project" })),
+      pagination: { page, limit, total: visibleTasks.length, totalPages: Math.ceil(visibleTasks.length / limit) }
+    });
   });
 
   app.get("/api/tasks/:id", authenticateUser, async (req, res) => {
@@ -1182,6 +1178,17 @@ async function buildApp() {
     res.json(updated);
   });
 
+  app.delete("/api/comments/:id", authenticateUser, async (req, res) => {
+    const caller = (req as any).user;
+    const existing = await dbStore.getCommentById(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Comment not found." });
+    if (existing.userId !== caller.id && !isAdminRole(caller.role)) {
+      return res.status(403).json({ error: "You can only delete your own comments." });
+    }
+    await dbStore.deleteComment(req.params.id);
+    res.json({ success: true });
+  });
+
   // ─── Teams ─────
   app.get("/api/teams", authenticateUser, async (req, res) => {
     const teamsList = await dbStore.getTeams();
@@ -1333,8 +1340,13 @@ async function buildApp() {
   // ─── Notifications ────
   app.get("/api/notifications", authenticateUser, async (req, res) => {
     const caller = (req as any).user;
-    const list = await dbStore.getNotifications(caller.id);
-    res.json(list);
+    const { page, limit, skip } = getPagination(req.query);
+    const allNotifs = await dbStore.getNotifications(caller.id);
+    const paginated = allNotifs.slice(skip, skip + limit);
+    res.json({
+      data: paginated,
+      pagination: { page, limit, total: allNotifs.length, totalPages: Math.ceil(allNotifs.length / limit) }
+    });
   });
 
   app.post("/api/notifications/read-all", authenticateUser, async (req, res) => {
@@ -1614,7 +1626,12 @@ async function buildApp() {
       }
       const data = await r.json();
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-      res.json({ text });
+      const sanitizedText = text
+        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+        .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
+        .replace(/on\w+\s*=\s*["'][^"']*["']/gi, "")
+        .replace(/on\w+\s*=\s*[^\s>]*/gi, "");
+      res.json({ text: sanitizedText });
     } catch (err: any) {
       res.status(500).json({ error: err.message || "AI generation failed." });
     }

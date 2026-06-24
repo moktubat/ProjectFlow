@@ -8,11 +8,14 @@ import path from "path";
 import crypto from "crypto";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
+import os from "os";
 import { User, Project, Task, Team, Comment, Notification, Role, UserStatus, Activity, Invitation } from "../src/types/index.js";
 
 dotenv.config();
 
-const STORE_PATH = path.join(process.cwd(), "server", "store.json");
+const STORE_PATH = process.env.VERCEL
+  ? path.join(os.tmpdir(), "store.json")
+  : path.join(process.cwd(), "server", "store.json");
 
 // Short, URL/ID-safe random suffix generator backed by crypto.
 function genId(prefix: string): string {
@@ -761,6 +764,22 @@ export const dbStore = {
       (comment as any).editedAt = editedAt;
       writeDb(db);
       return comment;
+    }
+  },
+
+  deleteComment: async (id: string): Promise<boolean> => {
+    if (isMongoConnected) {
+      const res = await MongoComment.deleteOne({ _id: id } as any);
+      return res.deletedCount > 0;
+    } else {
+      const db = readDb();
+      const initialLength = db.comments.length;
+      db.comments = db.comments.filter(c => c.id !== id);
+      if (db.comments.length !== initialLength) {
+        writeDb(db);
+        return true;
+      }
+      return false;
     }
   },
 

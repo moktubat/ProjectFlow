@@ -49,9 +49,12 @@ export function DashboardView() {
       fetch("/api/tasks", { headers: { Authorization: `Bearer ${token}` } }),
       fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
     ])
-      .then(([pR, tR, uR]) =>
-        Promise.all([pR.ok ? pR.json() : [], tR.ok ? tR.json() : [], uR.ok ? uR.json() : []])
-      )
+      .then(async ([pR, tR, uR]) => {
+        const pJ = pR.ok ? await pR.json() : [];
+        const tJ = tR.ok ? await tR.json() : [];
+        const uJ = uR.ok ? await uR.json() : [];
+        return [pJ.data ?? pJ, tJ.data ?? tJ, uJ.data ?? uJ];
+      })
       .then(([p, t, u]) => { setProjects(p); setTasks(t); setUsers(u); })
       .finally(() => setIsLoading(false));
   }, [token]);
