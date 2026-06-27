@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import DOMPurify from "dompurify";
 import { generateWithGemini } from "@/src/lib/ai-generate.js";
+import { apiFetch } from "@/src/lib/api.js";
 
 // ─── Inline-editable title ────────────────────────────────────────────────────
 function EditableTitle({
@@ -49,7 +50,7 @@ function EditableTitle({
         <button onClick={commit} className="p-1 text-green-600 hover:bg-green-50 rounded">
           <Check className="w-4 h-4" />
         </button>
-        <button onClick={() => { setDraft(value); setEditing(false); }} className="p-1 text-[#737373] hover:bg-[#F4F4F4] rounded">
+        <button onClick={() => { setDraft(value); setEditing(false); }} className="p-1 text-slate-500 hover:bg-[#F4F4F4] rounded">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -61,7 +62,7 @@ function EditableTitle({
       <h1 className="text-lg font-semibold text-[#111111] leading-snug">{value}</h1>
       <button
         onClick={() => { setDraft(value); setEditing(true); }}
-        className="opacity-0 group-hover:opacity-100 p-1 text-[#A0A0A0] hover:text-[#0038BC] hover:bg-[#e8edfb] rounded transition-all mt-0.5"
+        className="opacity-0 group-hover:opacity-100 p-1 text-[#A0A0A0] hover:text-[#0038BC] hover:bg-primary-light rounded transition-all mt-0.5"
         title="Edit title"
       >
         <Pencil className="w-3.5 h-3.5" />
@@ -74,11 +75,9 @@ function EditableTitle({
 function SubTaskList({
   subTasks,
   onUpdate,
-  token,
 }: {
   subTasks: SubTask[];
   onUpdate: (sub: SubTask[]) => Promise<void>;
-  token: string | null;
 }) {
   const [newTitle, setNewTitle] = useState("");
   const [adding, setAdding] = useState(false);
@@ -136,8 +135,7 @@ function SubTaskList({
     try {
       const existingTitles = subTasks.map((s) => `- ${s.title}`).join("\n");
       const text = await generateWithGemini(
-        `Given these existing sub-tasks for a software development task:\n${existingTitles || "(none yet)"}\n\nSuggest 5 concise, actionable sub-tasks (each under 8 words). Return ONLY a plain list, one per line, no numbers or bullets.`,
-        token
+        `Given these existing sub-tasks for a software development task:\n${existingTitles || "(none yet)"}\n\nSuggest 5 concise, actionable sub-tasks (each under 8 words). Return ONLY a plain list, one per line, no numbers or bullets.`
       );
       const suggestions = text.split("\n").filter((l) => l.trim()).slice(0, 5);
       const newSubs: SubTask[] = suggestions.map((title) => ({
@@ -160,11 +158,11 @@ function SubTaskList({
     <div className="bg-white border border-[#E8E8E8] rounded-xl p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <CheckSquare className="w-3.5 h-3.5 text-[#737373]" />
+          <CheckSquare className="w-3.5 h-3.5 text-slate-500" />
           <p className="text-sm font-medium text-[#111111]">
             Sub-tasks
             {subTasks.length > 0 && (
-              <span className="ml-1.5 text-xs font-normal text-[#737373]">
+              <span className="ml-1.5 text-xs font-normal text-slate-500">
                 {done}/{subTasks.length}
               </span>
             )}
@@ -174,7 +172,7 @@ function SubTaskList({
           <button
             onClick={handleAiSuggest}
             disabled={aiGenerating}
-            className="flex items-center gap-1 text-xs text-[#EF8F00] hover:text-[#d67f00] font-medium px-2 py-1 bg-[#fef3dc] hover:bg-[#fde8b0] rounded-lg transition-colors disabled:opacity-50"
+            className="flex items-center gap-1 text-xs text-[#EF8F00] hover:text-accent-hover font-medium px-2 py-1 bg-accent-light hover:bg-[#fde8b0] rounded-lg transition-colors disabled:opacity-50"
           >
             {aiGenerating ? (
               <div className="w-3 h-3 border-2 border-[#EF8F00] border-t-transparent rounded-full animate-spin" />
@@ -216,13 +214,13 @@ function SubTaskList({
           <button
             onClick={addSub}
             disabled={saving || !newTitle.trim()}
-            className="p-1.5 bg-[#0038BC] text-white rounded-lg hover:bg-[#002fa3] disabled:opacity-50 transition-colors"
+            className="p-1.5 bg-[#0038BC] text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
           >
             {saving ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Check className="w-3.5 h-3.5" />}
           </button>
           <button
             onClick={() => { setAdding(false); setNewTitle(""); }}
-            className="p-1.5 text-[#737373] hover:bg-[#EEEEEE] rounded-lg transition-colors"
+            className="p-1.5 text-slate-500 hover:bg-[#EEEEEE] rounded-lg transition-colors"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -246,7 +244,7 @@ function SubTaskList({
               <button onClick={() => saveEdit(s.id)} disabled={saving} className="p-1 text-green-600 hover:bg-green-50 rounded">
                 <Check className="w-3.5 h-3.5" />
               </button>
-              <button onClick={() => setEditId(null)} className="p-1 text-[#737373] hover:bg-[#F4F4F4] rounded">
+              <button onClick={() => setEditId(null)} className="p-1 text-slate-500 hover:bg-[#F4F4F4] rounded">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -259,13 +257,13 @@ function SubTaskList({
               >
                 {s.completed ? <CheckCircle2 className="w-4 h-4" /> : <Circle className="w-4 h-4" />}
               </button>
-              <span className={`flex-1 text-sm transition-all ${s.completed ? "line-through text-[#A0A0A0]" : "text-[#525252]"}`}>
+              <span className={`flex-1 text-sm transition-all ${s.completed ? "line-through text-[#A0A0A0]" : "text-slate-600"}`}>
                 {s.title}
               </span>
               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
                   onClick={() => { setEditVal(s.title); setEditId(s.id); }}
-                  className="p-1 text-[#A0A0A0] hover:text-[#0038BC] hover:bg-[#e8edfb] rounded"
+                  className="p-1 text-[#A0A0A0] hover:text-[#0038BC] hover:bg-primary-light rounded"
                 >
                   <Pencil className="w-3 h-3" />
                 </button>
@@ -321,11 +319,11 @@ function CommentItem({
     <div className="p-3 bg-[#F7F8FA] border border-[#E8E8E8] rounded-lg group">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-full bg-[#e8edfb] text-[#0038BC] text-xs font-medium flex items-center justify-center shrink-0">
+          <div className="w-6 h-6 rounded-full bg-primary-light text-[#0038BC] text-xs font-medium flex items-center justify-center shrink-0">
             {comment.userName.charAt(0)}
           </div>
           <span className="text-sm font-medium text-[#111111]">{comment.userName}</span>
-          <span className="text-xs text-[#737373] bg-[#EEEEEE] px-1.5 py-0.5 rounded">
+          <span className="text-xs text-slate-500 bg-[#EEEEEE] px-1.5 py-0.5 rounded">
             {comment.userRole}
           </span>
         </div>
@@ -336,7 +334,7 @@ function CommentItem({
           {isOwn && !editing && (
             <button
               onClick={() => { setDraft(comment.content); setEditing(true); }}
-              className="opacity-0 group-hover:opacity-100 p-1 text-[#A0A0A0] hover:text-[#0038BC] hover:bg-[#e8edfb] rounded transition-all"
+              className="opacity-0 group-hover:opacity-100 p-1 text-[#A0A0A0] hover:text-[#0038BC] hover:bg-primary-light rounded transition-all"
             >
               <Pencil className="w-3 h-3" />
             </button>
@@ -354,7 +352,7 @@ function CommentItem({
         </div>
       ) : (
         <div
-          className="text-sm text-[#525252] prose prose-sm max-w-none"
+          className="text-sm text-slate-600 prose prose-sm max-w-none"
           dangerouslySetInnerHTML={{
             __html: DOMPurify.sanitize(
               DOMPurify.sanitize(comment.content).replace(
@@ -373,7 +371,6 @@ function CommentItem({
 export function TaskDetailsView({ taskId }: { taskId: string }) {
   const { task, isLoading, error, refresh: reloadTask, updateTask, logHours } = useTask(taskId);
   const { comments, refresh: reloadComments, addComment } = useComments(taskId);
-  const token = useUIStore((s) => s.token);
   const user = useUIStore((s) => s.user);
   const navigate = useUIStore((s) => s.navigate);
 
@@ -406,10 +403,9 @@ export function TaskDetailsView({ taskId }: { taskId: string }) {
   const [aiDescGenerating, setAiDescGenerating] = useState(false);
 
   useEffect(() => {
-    if (!token) return;
     Promise.all([
-      fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
-      fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
+      apiFetch("/api/users"),
+      apiFetch("/api/teams"),
     ]).then(async ([u, t]) => {
       if (u.ok) {
         const j = await u.json();
@@ -421,29 +417,29 @@ export function TaskDetailsView({ taskId }: { taskId: string }) {
         setTeams(j.data ?? j);
       }
     });
-  }, [token]);
+  }, []);
 
   useEffect(() => {
-    if (!token || !task?.projectId) return;
-    fetch(`/api/tasks?projectId=${task.projectId}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!task?.projectId) return;
+    apiFetch(`/api/tasks?projectId=${task.projectId}`)
       .then(async (r) => {
         if (!r.ok) return [];
         const j = await r.json();
         return j.data ?? j;
       })
       .then(setProjTasks);
-  }, [token, task?.projectId]);
+  }, [task?.projectId]);
 
   useEffect(() => {
-    if (!token || !task?.projectId) return;
-    fetch(`/api/projects/${task.projectId}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!task?.projectId) return;
+    apiFetch(`/api/projects/${task.projectId}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((proj) => {
         if (!proj) return;
         setRecentAssignees(proj.recentAssignees ?? []);
         setUsers((prev) => prev.filter((u) => proj.members?.includes(u.id)));
       });
-  }, [token, task?.projectId]);
+  }, [task?.projectId]);
 
   if (isLoading)
     return (
@@ -491,12 +487,11 @@ export function TaskDetailsView({ taskId }: { taskId: string }) {
     try {
       const text = await generateWithGemini(
         `Write a clear, concise task description for a software development task:
-Task title: "${task.title}"
-Category: ${task.category}
-Priority: ${task.priority}
+        Task title: "${task.title}"
+        Category: ${task.category}
+        Priority: ${task.priority}
 
-Include: what needs to be done, acceptance criteria, any important notes. 2-3 paragraphs, plain text.`,
-        token
+        Include: what needs to be done, acceptance criteria, any important notes. 2-3 paragraphs, plain text.`
       );
       setDescDraft(text);
     } catch (e: any) {
@@ -609,11 +604,10 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
 
   // Comment editing — uses a direct API call since useComments doesn't expose edit
   const handleEditComment = async (id: string, content: string) => {
-    if (!token) return;
     try {
-      const res = await fetch(`/api/comments/${id}`, {
+      const res = await apiFetch(`/api/comments/${id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: DOMPurify.sanitize(content) }),
       });
       if (res.ok) {
@@ -639,7 +633,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
     <div className="space-y-4">
       <button
         onClick={() => navigate(`projects/${task.projectId}`)}
-        className="flex items-center gap-1.5 text-sm text-[#737373] hover:text-[#111111] transition-colors"
+        className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-[#111111] transition-colors"
       >
         <ArrowLeft className="w-4 h-4" /> Back to project
       </button>
@@ -649,7 +643,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs bg-[#e8edfb] text-[#0038BC] px-2 py-0.5 rounded-md">
+              <span className="text-xs bg-primary-light text-[#0038BC] px-2 py-0.5 rounded-md">
                 {task.category}
               </span>
               <span className="text-xs text-[#A0A0A0]">{task.projectName}</span>
@@ -658,13 +652,13 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <div>
-              <label className="block text-xs text-[#737373] mb-1">Status</label>
+              <label className="block text-xs text-slate-500 mb-1">Status</label>
               <select value={task.status} onChange={(e) => changeStatus(e.target.value)} className={SEL}>
                 {["To Do", "In Progress", "Review", "Done"].map((s) => <option key={s}>{s}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs text-[#737373] mb-1">Priority</label>
+              <label className="block text-xs text-slate-500 mb-1">Priority</label>
               <select value={task.priority} onChange={(e) => changePriority(e.target.value)} className={SEL}>
                 {["Low", "Medium", "High", "Critical"].map((p) => <option key={p}>{p}</option>)}
               </select>
@@ -680,7 +674,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
           <div className="bg-white border border-[#E8E8E8] rounded-xl p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <CheckSquare className="w-3.5 h-3.5 text-[#737373]" />
+                <CheckSquare className="w-3.5 h-3.5 text-slate-500" />
                 <p className="text-sm font-medium text-[#111111]">Description</p>
               </div>
               <div className="flex items-center gap-2">
@@ -693,20 +687,19 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                         setAiDescGenerating(true);
                         try {
                           const t = await generateWithGemini(
-                            `Write a task description for: "${task.title}" (${task.category}, ${task.priority} priority). 2 paragraphs, plain text.`,
-                            token
+                            `Write a task description for: "${task.title}" (${task.category}, ${task.priority} priority). 2 paragraphs, plain text.`
                           );
                           setDescDraft(t);
                         } catch { }
                         setAiDescGenerating(false);
                       }}
-                      className="flex items-center gap-1 text-xs text-[#EF8F00] font-medium px-2 py-1 bg-[#fef3dc] hover:bg-[#fde8b0] rounded-lg transition-colors"
+                      className="flex items-center gap-1 text-xs text-[#EF8F00] font-medium px-2 py-1 bg-accent-light hover:bg-[#fde8b0] rounded-lg transition-colors"
                     >
                       <Sparkles className="w-3 h-3" /> AI write
                     </button>
                     <button
                       onClick={() => { setDescDraft(task.richTextDesc || ""); setEditingDesc(true); }}
-                      className="flex items-center gap-1 text-xs text-[#737373] hover:text-[#0038BC] hover:bg-[#e8edfb] px-2 py-1 rounded-lg transition-colors"
+                      className="flex items-center gap-1 text-xs text-slate-500 hover:text-[#0038BC] hover:bg-primary-light px-2 py-1 rounded-lg transition-colors"
                     >
                       <Pencil className="w-3 h-3" /> Edit
                     </button>
@@ -735,7 +728,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
               </div>
             ) : task.richTextDesc ? (
               <div
-                className="prose prose-sm max-w-none text-[#525252]"
+                className="prose prose-sm max-w-none text-slate-600"
                 dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(task.richTextDesc) }}
               />
             ) : (
@@ -749,13 +742,13 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
           </div>
 
           {/* Sub-tasks */}
-          <SubTaskList subTasks={subTasks} onUpdate={saveSubTasks} token={token} />
+          <SubTaskList subTasks={subTasks} onUpdate={saveSubTasks} />
 
           {/* Time tracking */}
           <div className="bg-white border border-[#E8E8E8] rounded-xl p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <Clock className="w-3.5 h-3.5 text-[#737373]" />
+                <Clock className="w-3.5 h-3.5 text-slate-500" />
                 <p className="text-sm font-medium text-[#111111]">Time tracking</p>
               </div>
               <div className="flex items-center gap-2">
@@ -767,7 +760,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                     }}
                   />
                 </div>
-                <span className="text-xs text-[#737373]">{totalLogged}h / {task.estimatedHours}h</span>
+                <span className="text-xs text-slate-500">{totalLogged}h / {task.estimatedHours}h</span>
               </div>
             </div>
 
@@ -821,7 +814,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                   <div key={l.id} className="flex items-center justify-between p-2.5 bg-[#F7F8FA] border border-[#E8E8E8] rounded-lg">
                     <div>
                       <p className="text-sm text-[#111111]">{l.note}</p>
-                      <p className="text-xs text-[#737373]">
+                      <p className="text-xs text-slate-500">
                         {l.userName ?? l.userId} · {l.createdAt?.split("T")[0]}
                         {l.startTime && l.endTime && (
                           <span className="ml-1 text-[#A0A0A0]">
@@ -842,7 +835,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
           {/* Comments */}
           <div className="bg-white border border-[#E8E8E8] rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
-              <MessageSquare className="w-3.5 h-3.5 text-[#737373]" />
+              <MessageSquare className="w-3.5 h-3.5 text-slate-500" />
               <p className="text-sm font-medium text-[#111111]">Comments ({comments.length})</p>
             </div>
             <div className="space-y-3 mb-4 max-h-72 overflow-y-auto">
@@ -882,7 +875,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
             <div className="space-y-0">
               {/* Due date — custom picker */}
               <div className="py-2 border-b border-[#F4F4F4]">
-                <p className="text-xs text-[#737373] mb-1.5">Due date</p>
+                <p className="text-xs text-slate-500 mb-1.5">Due date</p>
                 <SingleDatePicker
                   value={task.dueDate}
                   onChange={changeDueDate}
@@ -892,7 +885,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
 
               {/* Estimated hours */}
               <div className="flex items-center justify-between py-2 border-b border-[#F4F4F4]">
-                <span className="text-xs text-[#737373]">Estimated</span>
+                <span className="text-xs text-slate-500">Estimated</span>
                 <input
                   type="number"
                   step="0.5"
@@ -903,7 +896,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                 />
               </div>
               <div className="flex items-center justify-between py-2">
-                <span className="text-xs text-[#737373]">Logged</span>
+                <span className="text-xs text-slate-500">Logged</span>
                 <span className="text-sm text-[#111111]">{totalLogged}h</span>
               </div>
             </div>
@@ -912,14 +905,14 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
           {/* Assignees */}
           <div className="bg-white border border-[#E8E8E8] rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
-              <Users className="w-3.5 h-3.5 text-[#737373]" />
+              <Users className="w-3.5 h-3.5 text-slate-500" />
               <p className="text-sm font-medium text-[#111111]">Assignees</p>
             </div>
             <div className="bg-[#F7F8FA] border border-[#E8E8E8] rounded-lg p-2.5 mb-3">
-              <p className="flex items-center gap-1 text-xs font-medium text-[#525252] mb-1.5">
-                <HelpCircle className="w-3 h-3 text-[#737373]" /> How to assign
+              <p className="flex items-center gap-1 text-xs font-medium text-slate-600 mb-1.5">
+                <HelpCircle className="w-3 h-3 text-slate-500" /> How to assign
               </p>
-              <p className="text-xs text-[#737373]">
+              <p className="text-xs text-slate-500">
                 <span className="font-medium text-[#111111]">@username</span> ·{" "}
                 <span className="font-medium text-[#111111]">@TeamName</span> ·{" "}
                 <span className="font-medium text-[#111111]">email@co.com</span>
@@ -949,7 +942,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
               {task.assignees.length > 0 ? (
                 task.assignees.map((a, i) => (
                   <div key={i} className="flex items-center justify-between p-2 bg-[#F7F8FA] border border-[#E8E8E8] rounded-lg">
-                    <span className="text-sm text-[#525252] truncate">
+                    <span className="text-sm text-slate-600 truncate">
                       {a.userId ? getName(a.userId) : `@${getTeamName(a.teamId!)}`}
                     </span>
                     <button onClick={() => unassign(a.userId ?? a.teamId!, !!a.teamId)} className="text-xs text-red-600 hover:underline ml-2 shrink-0">
@@ -966,7 +959,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
           {/* Dependencies */}
           <div className="bg-white border border-[#E8E8E8] rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
-              <GitMerge className="w-3.5 h-3.5 text-[#737373]" />
+              <GitMerge className="w-3.5 h-3.5 text-slate-500" />
               <p className="text-sm font-medium text-[#111111]">Dependencies</p>
             </div>
 
@@ -978,14 +971,14 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                     if (!depTask) return null;
                     const done = depTask.status === "Done";
                     return (
-                      <div key={dep.id} className={`p-2 rounded-lg border text-sm ${done ? "bg-green-50 border-green-200" : "bg-[#fef3dc] border-[#EF8F00]/30"}`}>
+                      <div key={dep.id} className={`p-2 rounded-lg border text-sm ${done ? "bg-green-50 border-green-200" : "bg-accent-light border-[#EF8F00]/30"}`}>
                         <div className="flex items-center justify-between">
                           <button onClick={() => navigate(`tasks/${depTask.id}`)} className={`truncate text-left text-xs hover:underline ${done ? "text-green-700 line-through" : "text-[#111111]"}`}>
                             {depTask.title}
                           </button>
                           <button onClick={() => removeDependency(dep.id)} className="text-xs text-red-600 hover:underline ml-2 shrink-0">Remove</button>
                         </div>
-                        {dep.note && <p className="text-xs text-[#737373] mt-1 italic">{dep.note}</p>}
+                        {dep.note && <p className="text-xs text-slate-500 mt-1 italic">{dep.note}</p>}
                       </div>
                     );
                   }
@@ -995,14 +988,14 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
                     ? task.assignees.some((a) => a.userId === dep.userId)
                     : task.assignees.some((a) => a.teamId === dep.teamId);
                   return (
-                    <div key={dep.id} className={`p-2 rounded-lg border text-sm ${isAssigned ? "bg-green-50 border-green-200" : "bg-[#fef3dc] border-[#EF8F00]/30"}`}>
+                    <div key={dep.id} className={`p-2 rounded-lg border text-sm ${isAssigned ? "bg-green-50 border-green-200" : "bg-accent-light border-[#EF8F00]/30"}`}>
                       <div className="flex items-center justify-between">
                         <span className={`truncate text-xs ${isAssigned ? "text-green-700 line-through" : "text-[#111111]"}`}>
                           {label} {isAssigned ? "(assigned)" : "(not yet assigned)"}
                         </span>
                         <button onClick={() => removeDependency(dep.id)} className="text-xs text-red-600 hover:underline ml-2 shrink-0">Remove</button>
                       </div>
-                      {dep.note && <p className="text-xs text-[#737373] mt-1 italic">{dep.note}</p>}
+                      {dep.note && <p className="text-xs text-slate-500 mt-1 italic">{dep.note}</p>}
                     </div>
                   );
                 })}
@@ -1012,7 +1005,7 @@ Include: what needs to be done, acceptance criteria, any important notes. 2-3 pa
             )}
 
             {/* Add new dependency */}
-            <p className="text-xs text-[#737373] mb-1.5">Add a person/team blocker:</p>
+            <p className="text-xs text-slate-500 mb-1.5">Add a person/team blocker:</p>
             <AssigneePicker
               users={users}
               teams={teams}

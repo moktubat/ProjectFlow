@@ -4,18 +4,18 @@ import { Button } from "../ui/Button.js";
 import { User, Role, UserStatus } from "../../types/index.js";
 import { ShieldCheck, Sparkles, AlertCircle, Link, Copy, Check, Trash2, Clock } from "lucide-react";
 import { Pagination } from "../ui/Pagination.js";
+import { apiFetch } from "@/src/lib/api.js";
 
 const STATUS_STYLES: Record<string, string> = {
   APPROVED: "bg-green-50 text-green-700 border border-green-200",
   PENDING: "bg-amber-50 text-amber-700 border border-amber-200",
   REJECTED: "bg-red-50 text-red-700 border border-red-200",
-  INACTIVE: "bg-[#F4F4F4] text-[#737373] border border-[#E8E8E8]",
+  INACTIVE: "bg-[#F4F4F4] text-slate-500 border border-[#E8E8E8]",
 };
 
 const SEL = "px-2 py-1 border border-[#D0D0D0] bg-white rounded-lg text-xs focus:outline-none focus:border-[#0038BC]";
 
 export function UsersApprovalView() {
-  const token = useUIStore((s) => s.token);
   const self = useUIStore((s) => s.user);
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
@@ -36,11 +36,10 @@ export function UsersApprovalView() {
   const [totalPages, setTotalPages] = useState(1);
 
   const load = async () => {
-    if (!token) return;
     setLoading(true);
     const [uR, tR] = await Promise.all([
-      fetch(`/api/users?page=${page}`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
+      apiFetch(`/api/users?page=${page}`),
+      apiFetch("/api/teams"),
     ]);
 
     if (uR.ok) {
@@ -57,9 +56,8 @@ export function UsersApprovalView() {
   };
 
   const loadInvites = async () => {
-    if (!token) return;
     setInvLoading(true);
-    const r = await fetch("/api/invitations", { headers: { Authorization: `Bearer ${token}` } });
+    const r = await apiFetch("/api/invitations");
     if (r.ok) setInvites(await r.json());
     setInvLoading(false);
   };
@@ -67,28 +65,28 @@ export function UsersApprovalView() {
   useEffect(() => {
     load();
     loadInvites();
-  }, [token, page]);
+  }, [page]);
 
   const updateStatus = async (id: string, status: UserStatus) => {
-    const res = await fetch(`/api/users/${id}/status`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ status }) });
+    const res = await apiFetch(`/api/users/${id}/status`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
     if (res.ok) load(); else { const d = await res.json(); alert(d.error); }
   };
 
   const updateRole = async (id: string, role: Role) => {
-    const res = await fetch(`/api/users/${id}/role`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ role }) });
+    const res = await apiFetch(`/api/users/${id}/role`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role }) });
     if (res.ok) load(); else { const d = await res.json(); alert(d.error); }
   };
 
   const updateTeam = async (id: string, teamId: string) => {
-    const res = await fetch(`/api/users/${id}/details`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ teamId }) });
+    const res = await apiFetch(`/api/users/${id}/details`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ teamId }) });
     if (res.ok) load(); else { const d = await res.json(); alert(d.error); }
   };
 
   const createInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     const teamName = teams.find((t) => t.id === invTeam)?.name;
-    const res = await fetch("/api/invitations", {
-      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    const res = await apiFetch("/api/invitations", {
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: invEmail || undefined, role: invRole, teamId: invTeam || undefined, teamName: teamName || undefined, usedLimit: invLimit, plan: invPlan }),
     });
     if (res.ok) { setInvEmail(""); setInvTeam(""); loadInvites(); }
@@ -97,7 +95,7 @@ export function UsersApprovalView() {
 
   const revokeInvite = async (id: string) => {
     if (!confirm("Revoke this invitation?")) return;
-    const res = await fetch(`/api/invitations/${id}/revoke`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    const res = await apiFetch(`/api/invitations/${id}/revoke`, { method: "POST" });
     if (res.ok) loadInvites(); else { const d = await res.json(); alert(d.error); }
   };
 
@@ -113,7 +111,7 @@ export function UsersApprovalView() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-[#E8E8E8] rounded-xl px-4 py-3.5">
         <div>
           <h2 className="text-base font-semibold text-[#111111]">Access management</h2>
-          <p className="text-sm text-[#737373] mt-0.5">Manage users, roles, and invitations</p>
+          <p className="text-sm text-slate-500 mt-0.5">Manage users, roles, and invitations</p>
         </div>
         <Button onClick={tab === "directory" ? load : loadInvites} variant="outline" size="sm">Refresh</Button>
       </div>
@@ -121,7 +119,7 @@ export function UsersApprovalView() {
       <div className="flex gap-1 bg-[#F4F4F4] p-1 rounded-xl w-fit">
         {(["directory", "invitations"] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)}
-            className={`px-4 py-1.5 text-sm rounded-lg transition-colors ${tab === t ? "bg-white text-[#111111] font-medium shadow-sm" : "text-[#737373] hover:text-[#111111]"}`}>
+            className={`px-4 py-1.5 text-sm rounded-lg transition-colors ${tab === t ? "bg-white text-[#111111] font-medium shadow-sm" : "text-slate-500 hover:text-[#111111]"}`}>
             {t === "directory" ? `Members (${users.length})` : `Invitations (${invites.length})`}
           </button>
         ))}
@@ -140,7 +138,7 @@ export function UsersApprovalView() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="bg-[#F7F8FA] border-b border-[#E8E8E8] text-xs text-[#737373]">
+                    <tr className="bg-[#F7F8FA] border-b border-[#E8E8E8] text-xs text-slate-500">
                       <th className="px-4 py-3 text-left font-medium">User</th>
                       <th className="px-4 py-3 text-left font-medium">Email</th>
                       <th className="px-4 py-3 text-left font-medium">Status</th>
@@ -154,7 +152,7 @@ export function UsersApprovalView() {
                       <tr key={u.id} className="hover:bg-[#F7F8FA] transition-colors">
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2.5">
-                            <div className="w-7 h-7 rounded-lg bg-[#e8edfb] text-[#0038BC] text-sm font-medium flex items-center justify-center shrink-0">
+                            <div className="w-7 h-7 rounded-lg bg-primary-light text-[#0038BC] text-sm font-medium flex items-center justify-center shrink-0">
                               {u.name.charAt(0)}
                             </div>
                             <div>
@@ -163,7 +161,7 @@ export function UsersApprovalView() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-sm text-[#737373]">{u.email}</td>
+                        <td className="px-4 py-3 text-sm text-slate-500">{u.email}</td>
                         <td className="px-4 py-3">
                           <span className={`text-xs px-2 py-0.5 rounded-md font-medium ${STATUS_STYLES[u.status] ?? STATUS_STYLES.INACTIVE}`}>{u.status}</span>
                         </td>
@@ -172,7 +170,7 @@ export function UsersApprovalView() {
                             <select value={u.role} onChange={(e) => updateRole(u.id, e.target.value as Role)} className={SEL}>
                               {Object.values(Role).map((r) => <option key={r} value={r}>{r}</option>)}
                             </select>
-                          ) : <span className="text-xs text-[#737373]">{u.role}</span>}
+                          ) : <span className="text-xs text-slate-500">{u.role}</span>}
                         </td>
                         <td className="px-4 py-3">
                           {canAdmin ? (
@@ -180,7 +178,7 @@ export function UsersApprovalView() {
                               <option value="none">No team</option>
                               {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                             </select>
-                          ) : <span className="text-xs text-[#737373]">{teams.find((t) => t.id === u.teamId)?.name ?? "—"}</span>}
+                          ) : <span className="text-xs text-slate-500">{teams.find((t) => t.id === u.teamId)?.name ?? "—"}</span>}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-end gap-2">
@@ -225,14 +223,14 @@ export function UsersApprovalView() {
             <form onSubmit={createInvite} className="space-y-3">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div>
-                  <label className="block text-xs text-[#737373] mb-1">Role</label>
+                  <label className="block text-xs text-slate-500 mb-1">Role</label>
                   <select value={invRole} onChange={(e) => setInvRole(e.target.value as Role)}
                     className="w-full px-3 py-2 border border-[#D0D0D0] rounded-lg text-sm bg-white focus:outline-none focus:border-[#0038BC]">
                     {Object.values(Role).map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-[#737373] mb-1">Team</label>
+                  <label className="block text-xs text-slate-500 mb-1">Team</label>
                   <select value={invTeam} onChange={(e) => setInvTeam(e.target.value)}
                     className="w-full px-3 py-2 border border-[#D0D0D0] rounded-lg text-sm bg-white focus:outline-none focus:border-[#0038BC]">
                     <option value="">No team</option>
@@ -240,7 +238,7 @@ export function UsersApprovalView() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-[#737373] mb-1">Uses</label>
+                  <label className="block text-xs text-slate-500 mb-1">Uses</label>
                   <select value={invLimit} onChange={(e) => setInvLimit(Number(e.target.value))}
                     className="w-full px-3 py-2 border border-[#D0D0D0] rounded-lg text-sm bg-white focus:outline-none focus:border-[#0038BC]">
                     <option value={1}>1 use</option><option value={5}>5 uses</option>
@@ -248,7 +246,7 @@ export function UsersApprovalView() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-[#737373] mb-1">Plan</label>
+                  <label className="block text-xs text-slate-500 mb-1">Plan</label>
                   <select value={invPlan} onChange={(e) => setInvPlan(e.target.value as any)}
                     className="w-full px-3 py-2 border border-[#D0D0D0] rounded-lg text-sm bg-white focus:outline-none focus:border-[#0038BC]">
                     <option>Free</option><option>Paid</option><option>Enterprise</option>
@@ -256,7 +254,7 @@ export function UsersApprovalView() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs text-[#737373] mb-1">Email (optional)</label>
+                <label className="block text-xs text-slate-500 mb-1">Email (optional)</label>
                 <input type="email" value={invEmail} onChange={(e) => setInvEmail(e.target.value)} placeholder="recruit@company.com"
                   className="w-full px-3 py-2 border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:border-[#0038BC]" />
               </div>
@@ -271,7 +269,7 @@ export function UsersApprovalView() {
           <div className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-[#E8E8E8] bg-[#F7F8FA] flex items-center justify-between">
               <p className="text-sm font-medium text-[#111111]">Invitations</p>
-              <span className="text-xs text-[#737373]">{invites.length} total</span>
+              <span className="text-xs text-slate-500">{invites.length} total</span>
             </div>
             {invLoading ? (
               <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-[#0038BC] border-t-transparent rounded-full animate-spin" /></div>
@@ -283,7 +281,7 @@ export function UsersApprovalView() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="bg-[#F7F8FA] border-b border-[#E8E8E8] text-xs text-[#737373]">
+                    <tr className="bg-[#F7F8FA] border-b border-[#E8E8E8] text-xs text-slate-500">
                       <th className="px-4 py-3 text-left font-medium">Token</th>
                       <th className="px-4 py-3 text-left font-medium">Role / Team</th>
                       <th className="px-4 py-3 text-left font-medium">Usage</th>
@@ -301,16 +299,16 @@ export function UsersApprovalView() {
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="text-xs bg-[#e8edfb] text-[#0038BC] px-2 py-0.5 rounded-md">{inv.role}</span>
-                              {inv.teamName && <span className="text-xs bg-[#fef3dc] text-[#9a5b00] px-2 py-0.5 rounded-md">{inv.teamName}</span>}
+                              <span className="text-xs bg-primary-light text-[#0038BC] px-2 py-0.5 rounded-md">{inv.role}</span>
+                              {inv.teamName && <span className="text-xs bg-accent-light text-[#9a5b00] px-2 py-0.5 rounded-md">{inv.teamName}</span>}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-sm text-[#737373]">{inv.usedCount} / {inv.usedLimit === 0 ? "∞" : inv.usedLimit}</td>
+                          <td className="px-4 py-3 text-sm text-slate-500">{inv.usedCount} / {inv.usedLimit === 0 ? "∞" : inv.usedLimit}</td>
                           <td className="px-4 py-3">
                             {expired ? (
                               <span className="flex items-center gap-1 text-xs text-red-600"><Clock className="w-3 h-3" />Expired</span>
                             ) : (
-                              <span className="text-xs text-[#737373]">{new Date(inv.expiresAt).toLocaleDateString()}</span>
+                              <span className="text-xs text-slate-500">{new Date(inv.expiresAt).toLocaleDateString()}</span>
                             )}
                           </td>
                           <td className="px-4 py-3">

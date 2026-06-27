@@ -1,12 +1,12 @@
-import React, { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useUIStore } from "../../store/ui-store.js";
 import { Notification } from "../../types/index.js";
 import { Bell, X, ArrowRight } from "lucide-react";
+import { apiFetch } from "@/src/lib/api.js";
 
 export function ToastNotificationManager() {
   const notifications = useUIStore((s) => s.notifications);
   const navigate = useUIStore((s) => s.navigate);
-  const token = useUIStore((s) => s.token);
   const setNotifications = useUIStore((s) => s.setNotifications);
 
   const [activeToast, setActiveToast] = useState<Notification | null>(null);
@@ -34,13 +34,14 @@ export function ToastNotificationManager() {
     if (!activeToast) return;
     const { id, relatedProjectId } = activeToast;
     setActiveToast(null);
-    if (token) {
-      try {
-        await fetch(`/api/notifications/${id}/read`, { method: "PUT", headers: { Authorization: `Bearer ${token}` } });
-        const res = await fetch("/api/notifications", { headers: { Authorization: `Bearer ${token}` } });
-        if (res.ok) setNotifications(await res.json());
-      } catch { }
-    }
+    try {
+      await apiFetch(`/api/notifications/${id}/read`, { method: "PUT" });
+      const res = await apiFetch("/api/notifications");
+      if (res.ok) {
+        const json = await res.json();
+        setNotifications(json.data ?? json);
+      }
+    } catch { }
     navigate(relatedProjectId ? `projects/${relatedProjectId}` : "notifications");
   };
 

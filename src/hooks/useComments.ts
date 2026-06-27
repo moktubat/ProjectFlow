@@ -1,34 +1,30 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Comment } from "../types/index.js";
-import { useUIStore } from "../store/ui-store.js";
 
 export function useComments(taskId?: string) {
-  const token = useUIStore((state) => state.token);
   const queryClient = useQueryClient();
 
   const query = useQuery<Comment[]>({
     queryKey: ["comments", taskId],
     queryFn: async () => {
       const res = await fetch(`/api/comments?taskId=${taskId}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
       });
       if (!res.ok) {
         throw new Error("Failed to load comments.");
       }
       return res.json();
     },
-    enabled: !!token && !!taskId,
+    enabled: !!taskId,
   });
 
   const addCommentMutation = useMutation({
     mutationFn: async (content: string) => {
-      if (!token || !taskId) throw new Error("Authentication required.");
+      if (!taskId) throw new Error("Task ID required.");
       const res = await fetch("/api/comments", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ taskId, content }),
       });
       const data = await res.json();

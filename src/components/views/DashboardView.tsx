@@ -8,6 +8,7 @@ import {
   Calendar, Users, ArrowRight, TrendingUp
 } from "lucide-react";
 import { TASK_STATUS_STYLES } from "@/src/lib/badge-styles.js";
+import { apiFetch } from "@/src/lib/api.js";
 
 function StatCard({
   label, value, sub, icon: Icon, accent = false,
@@ -18,8 +19,8 @@ function StatCard({
   return (
     <div className="bg-white rounded-xl border border-[#E8E8E8] p-5">
       <div className="flex items-start justify-between mb-3">
-        <p className="text-sm text-[#737373]">{label}</p>
-        <div className={`p-2 rounded-lg ${accent ? "bg-[#fef3dc]" : "bg-[#e8edfb]"}`}>
+        <p className="text-sm text-slate-500">{label}</p>
+        <div className={`p-2 rounded-lg ${accent ? "bg-accent-light" : "bg-primary-light"}`}>
           <Icon className={`w-4 h-4 ${accent ? "text-[#EF8F00]" : "text-[#0038BC]"}`} aria-hidden="true" />
         </div>
       </div>
@@ -32,7 +33,6 @@ function StatCard({
 export function DashboardView() {
   usePageTitle("Dashboard", "Your ProjectFlow workspace overview — projects, tasks, deadlines, and team workload at a glance.");
 
-  const token = useUIStore((s) => s.token);
   const user = useUIStore((s) => s.user);
   const navigate = useUIStore((s) => s.navigate);
 
@@ -42,12 +42,11 @@ export function DashboardView() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (!token) return;
     setIsLoading(true);
     Promise.all([
-      fetch("/api/projects", { headers: { Authorization: `Bearer ${token}` } }),
-      fetch("/api/tasks", { headers: { Authorization: `Bearer ${token}` } }),
-      fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
+      apiFetch("/api/projects"),
+      apiFetch("/api/tasks"),
+      apiFetch("/api/users"),
     ])
       .then(async ([pR, tR, uR]) => {
         const pJ = pR.ok ? await pR.json() : [];
@@ -57,7 +56,7 @@ export function DashboardView() {
       })
       .then(([p, t, u]) => { setProjects(p); setTasks(t); setUsers(u); })
       .finally(() => setIsLoading(false));
-  }, [token]);
+  }, []);
 
   const urgent = tasks.filter((t) => t.priority === "Critical" || t.priority === "High").length;
   const totalLogged = tasks.reduce((s, t) => s + t.timeLogs.reduce((a, l) => a + l.hours, 0), 0);
@@ -81,9 +80,9 @@ export function DashboardView() {
 
   const statusBadge: Record<string, string> = {
     Done: "bg-green-50 text-green-700",
-    "In Progress": "bg-[#e8edfb] text-[#0038BC]",
+    "In Progress": "bg-primary-light text-[#0038BC]",
     Review: "bg-[#fef3dc] text-[#9a5b00]",
-    "To Do": "bg-[#F4F4F4] text-[#737373]",
+    "To Do": "bg-[#F4F4F4] text-slate-500",
   };
 
   if (isLoading) {
@@ -91,7 +90,7 @@ export function DashboardView() {
       <div className="flex items-center justify-center py-32">
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-2 border-[#0038BC] border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-[#737373]">Loading dashboard…</p>
+          <p className="text-sm text-slate-500">Loading dashboard…</p>
         </div>
       </div>
     );
@@ -133,7 +132,7 @@ export function DashboardView() {
         <div className="lg:col-span-2 bg-white rounded-xl border border-[#E8E8E8]">
           <div className="flex items-center justify-between px-5 py-4 border-b border-[#E8E8E8]">
             <h3 className="font-semibold text-[#111111]">My assigned tasks</h3>
-            <span className="text-xs text-[#737373] bg-[#F4F4F4] px-2 py-0.5 rounded-md">{myTasks.length} tasks</span>
+            <span className="text-xs text-slate-500 bg-[#F4F4F4] px-2 py-0.5 rounded-md">{myTasks.length} tasks</span>
           </div>
           <div className="divide-y divide-[#F4F4F4] max-h-80 overflow-y-auto">
             {myTasks.length > 0 ? myTasks.map((t) => (
@@ -145,11 +144,11 @@ export function DashboardView() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-[#111111] truncate">{t.title}</p>
-                    <p className="text-xs text-[#737373] mt-0.5">
+                    <p className="text-xs text-slate-500 mt-0.5">
                       {t.category} · Due {t.dueDate}
                     </p>
                   </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-md whitespace-nowrap shrink-0 ${TASK_STATUS_STYLES[t.priority] || "bg-[#F4F4F4] text-[#737373]"}`}>
+                  <span className={`text-xs px-2 py-0.5 rounded-md whitespace-nowrap shrink-0 ${TASK_STATUS_STYLES[t.priority] || "bg-[#F4F4F4] text-slate-500"}`}>
                     {t.priority}
                   </span>
                 </div>
@@ -157,7 +156,7 @@ export function DashboardView() {
             )) : (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <CheckSquare className="w-8 h-8 text-[#D0D0D0] mb-2" aria-hidden="true" />
-                <p className="text-sm font-medium text-[#525252]">All clear!</p>
+                <p className="text-sm font-medium text-slate-600">All clear!</p>
                 <p className="text-xs text-[#A0A0A0] mt-0.5">No tasks assigned to you right now.</p>
               </div>
             )}
@@ -180,7 +179,7 @@ export function DashboardView() {
                 <p className="text-sm font-medium text-[#111111] truncate">{t.title}</p>
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-xs text-[#EF8F00] font-medium">Due {t.dueDate}</p>
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${statusBadge[t.status] || "bg-[#F4F4F4] text-[#737373]"}`}>
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${statusBadge[t.status] || "bg-[#F4F4F4] text-slate-500"}`}>
                     {t.status}
                   </span>
                 </div>
@@ -188,7 +187,7 @@ export function DashboardView() {
             )) : (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <Calendar className="w-8 h-8 text-[#D0D0D0] mb-2" aria-hidden="true" />
-                <p className="text-sm font-medium text-[#525252]">No deadlines this week</p>
+                <p className="text-sm font-medium text-slate-600">No deadlines this week</p>
               </div>
             )}
           </div>
@@ -210,7 +209,7 @@ export function DashboardView() {
                 <div key={u.id}>
                   <div className="flex justify-between text-sm mb-1.5">
                     <span className="font-medium text-[#111111]">{u.name}</span>
-                    <span className="text-[#737373]">{count} task{count !== 1 ? "s" : ""}</span>
+                    <span className="text-slate-500">{count} task{count !== 1 ? "s" : ""}</span>
                   </div>
                   <div className="w-full bg-[#EEEEEE] rounded-full h-1.5">
                     <div
@@ -233,7 +232,7 @@ export function DashboardView() {
           <div className="flex items-center justify-between px-5 py-4 border-b border-[#E8E8E8]">
             <h3 className="font-semibold text-[#111111]">Account approvals</h3>
             {pending.length > 0 && (
-              <span className="text-xs bg-[#fef3dc] text-[#9a5b00] border border-[#EF8F00]/20 px-2 py-0.5 rounded-md font-medium">
+              <span className="text-xs bg-accent-light text-[#9a5b00] border border-[#EF8F00]/20 px-2 py-0.5 rounded-md font-medium">
                 {pending.length} pending
               </span>
             )}
@@ -244,7 +243,7 @@ export function DashboardView() {
                 <div key={u.id} className="flex items-center justify-between px-5 py-3.5 gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-[#111111] truncate">{u.name}</p>
-                    <p className="text-xs text-[#737373] truncate">@{u.username} · {u.email}</p>
+                    <p className="text-xs text-slate-500 truncate">@{u.username} · {u.email}</p>
                   </div>
                   <Button onClick={() => navigate("users")} variant="outline" size="sm" className="shrink-0">
                     Review
@@ -253,14 +252,14 @@ export function DashboardView() {
               )) : (
                 <div className="flex flex-col items-center justify-center py-12 text-center">
                   <Users className="w-8 h-8 text-[#D0D0D0] mb-2" aria-hidden="true" />
-                  <p className="text-sm font-medium text-[#525252]">No pending requests</p>
+                  <p className="text-sm font-medium text-slate-600">No pending requests</p>
                 </div>
               )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-12 text-center px-5">
               <Users className="w-8 h-8 text-[#D0D0D0] mb-2" aria-hidden="true" />
-              <p className="text-sm font-medium text-[#525252]">Access restricted</p>
+              <p className="text-sm font-medium text-slate-600">Access restricted</p>
               <p className="text-xs text-[#A0A0A0] mt-1">Only admins and project managers can approve accounts.</p>
             </div>
           )}

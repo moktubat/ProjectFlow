@@ -19,14 +19,16 @@ import {
   deliverFormattedNotification,
   validateUpload,
 } from "./server/integrations.js";
+import cookieParser from "cookie-parser";
 
 // ─── Startup environment guard ────────
 
-const REQUIRED_ENV_VARS = ["APP_URL"] as const;
+const REQUIRED_ENV_VARS = ["APP_URL", "SETUP_TOKEN"] as const;
 for (const key of REQUIRED_ENV_VARS) {
   if (!process.env[key]) {
-    console.error(`[FATAL] Missing required environment variable: ${key}. Exiting.`);
-    throw new Error(`Missing required environment variable: ${key}`);
+    const msg = `[FATAL] Missing required environment variable: ${key}. Exiting.`;
+    console.error(msg);
+    throw new Error(msg);
   }
 }
 
@@ -145,31 +147,18 @@ async function buildApp() {
 
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+  app.use(cookieParser());
 
   // Add Helmet for security headers (X-Content-Type-Options,
-  app.use(
-    helmet({
-      contentSecurityPolicy: false,
-      crossOriginEmbedderPolicy: false,
-    })
-  );
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 
-  app.use(
-    cors({
-      origin: (origin, callback) => {
-        if (!origin) {
-          callback(null, true);
-          return;
-        }
-        if (ALLOWED_ORIGINS.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error("Not allowed by CORS"));
-        }
-      },
-      credentials: true,
-    })
-  );
+  app.use(cors({
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) callback(null, true);
+      else callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  }));
 
   // Separate body-size limits.
   app.use((req, res, next) => {
@@ -216,21 +205,21 @@ async function buildApp() {
 
   // ─── Auth middleware ──────
   const authenticateUser = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    const token = req.cookies?.session_token || req.headers.authorization?.split(" ")[1];
+
+    if (!token) {
       res.status(401).json({ error: "Unauthorized. Missing token." });
       return;
     }
-    const token = authHeader.split(" ")[1];
     const session = await dbStore.getSession(token);
     if (!session || new Date(session.expiresAt) < new Date()) {
       if (session) await dbStore.deleteSession(token);
-      res.status(401).json({ error: "Session expired or invalid. Please sign in again." });
+      res.status(401).json({ error: "Session expired or invalid." });
       return;
     }
     const user = await dbStore.getUserById(session.userId);
     if (!user) {
-      res.status(401).json({ error: "Session expired or user not found." });
+      res.status(401).json({ error: "User not found." });
       return;
     }
     if (user.status !== UserStatus.APPROVED) {
@@ -358,30 +347,33 @@ async function buildApp() {
     const passwordOk = await verifyPassword(password, compareTarget);
 
     if (!user || !passwordOk) {
-      res.status(400).json({ error: "Invalid username, email, or password." });
+      res.status(400).json({ error: "Invalid credentials." });
       return;
     }
-
     if (user.status !== UserStatus.APPROVED) {
-      res.status(403).json({ error: `Your account is ${user.status}. Please contact an administrator.` });
+      res.status(403).json({ error: `Account is ${user.status}.` });
       return;
     }
 
     if (/^[a-f0-9]{64}$/i.test((user as any).passwordHash)) {
-      const upgraded = await hashPassword(password);
-      await dbStore.updateUserPasswordHash?.(user.id, upgraded);
+      await dbStore.updateUserPasswordHash?.(user.id, await hashPassword(password));
     }
 
     const token = await createSessionForUser(user.id);
-
-    res.json({ message: "Login successful.", token, user });
+    res.cookie("session_token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: SESSION_TTL_MS,
+      path: "/",
+    });
+    res.json({ message: "Login successful.", user });
   });
 
-  app.post("/api/auth/logout", async (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith("Bearer ")) {
-      await dbStore.deleteSession(authHeader.split(" ")[1]);
-    }
+  app.post("/api/auth/logout", authenticateUser, async (req, res) => {
+    const token = req.cookies?.session_token || req.headers.authorization?.split(" ")[1];
+    if (token) await dbStore.deleteSession(token);
+    res.clearCookie("session_token");
     res.json({ success: true });
   });
 
@@ -1016,6 +1008,28 @@ async function buildApp() {
     if (updated) {
       if (originalStatus !== updated.status) {
         await dbStore.createActivity(updated.projectId, caller.id, caller.name, "task_moved", `Moved task "${updated.title}" from "${originalStatus}" to "${updated.status}"`);
+
+        // ─── Notify assignees on every status change (not just → Done) ──────
+        for (const asn of updated.assignees) {
+          if (asn.userId && asn.userId !== caller.id) {
+            await dbStore.createNotification(
+              asn.userId,
+              "status_change",
+              `Task "${updated.title}" moved from "${originalStatus}" to "${updated.status}"`,
+              updated.projectId
+            );
+          } else if (asn.teamId) {
+            const teamMembers = await dbStore.getUsers();
+            for (const tu of teamMembers.filter(u => u.teamId === asn.teamId && u.id !== caller.id)) {
+              await dbStore.createNotification(
+                tu.id,
+                "status_change",
+                `Task "${updated.title}" (your team) moved from "${originalStatus}" to "${updated.status}"`,
+                updated.projectId
+              );
+            }
+          }
+        }
       } else {
         await dbStore.createActivity(updated.projectId, caller.id, caller.name, "task_updated", `Updated task "${updated.title}"`);
       }
@@ -1151,6 +1165,52 @@ async function buildApp() {
     if (taskObj) {
       const strippedContent = content.replace(/<[^>]*>/g, "").substring(0, 60);
       await dbStore.createActivity(taskObj.projectId, caller.id, caller.name, "comment_added", `Commented on task "${taskObj.title}": "${strippedContent}..."`);
+
+      // ─── @mention notifications ─────────
+      const mentionHandles = [...new Set(
+        (content.match(/@([a-zA-Z0-9_.-]+)/g) || []).map((m: string) => m.slice(1).toLowerCase())
+      )];
+
+      if (mentionHandles.length > 0) {
+        const project = await dbStore.getProjectById(taskObj.projectId);
+        const allUsers = await dbStore.getUsers();
+        const projectMemberIds = new Set(project?.members ?? []);
+
+        const mentionedUsers = allUsers.filter(
+          (u) =>
+            mentionHandles.includes(u.username.toLowerCase()) &&
+            u.id !== caller.id &&
+            projectMemberIds.has(u.id)
+        );
+
+        for (const mUser of mentionedUsers) {
+          await dbStore.createNotification(
+            mUser.id,
+            "mention",
+            `${caller.name} mentioned you in a comment on task "${taskObj.title}"`,
+            taskObj.projectId
+          );
+          if (mUser.email) {
+            try {
+              await deliverFormattedNotification({
+                recipientName: mUser.name,
+                recipientEmail: mUser.email,
+                subject: `You were mentioned in "${taskObj.title}"`,
+                heading: `New Mention`,
+                message: `${caller.name} mentioned you in a comment: "${strippedContent}..."`,
+                actionLabel: "View Task",
+                actionUrl: `${process.env.APP_URL || "http://localhost:3000"}`,
+                metaDetails: [
+                  { label: "Task", value: taskObj.title },
+                  { label: "Mentioned By", value: caller.name },
+                ],
+              });
+            } catch (e) {
+              console.error("[EMAIL] mention notification failed:", e);
+            }
+          }
+        }
+      }
     }
 
     res.status(201).json(comment);
@@ -1611,6 +1671,8 @@ async function buildApp() {
       res.status(503).json({ error: "AI generation is not configured on this server." });
       return;
     }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
       const r = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
@@ -1618,8 +1680,10 @@ async function buildApp() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+          signal: controller.signal,
         }
       );
+      clearTimeout(timeoutId);
       if (!r.ok) {
         res.status(502).json({ error: `AI provider error: ${r.status}` });
         return;
@@ -1633,6 +1697,10 @@ async function buildApp() {
         .replace(/on\w+\s*=\s*[^\s>]*/gi, "");
       res.json({ text: sanitizedText });
     } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === "AbortError") {
+        return res.status(504).json({ error: "AI generation timed out." });
+      }
       res.status(500).json({ error: err.message || "AI generation failed." });
     }
   });

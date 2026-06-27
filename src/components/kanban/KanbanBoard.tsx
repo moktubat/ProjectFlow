@@ -1,7 +1,6 @@
 import { Task, User } from "../../types/index.js";
 import { KanbanColumn } from "./KanbanColumn.js";
 import { KanbanCard } from "./KanbanCard.js";
-import { useUIStore } from "../../store/ui-store.js";
 import { useDragDropBoard, BOARD_STATUSES } from "../../hooks/useDragDropBoard.js";
 import { BoardWrapper } from "../board/BoardWrapper.js";
 
@@ -12,8 +11,7 @@ interface KanbanBoardProps {
 }
 
 export function KanbanBoard({ tasks, users, onTaskUpdated }: KanbanBoardProps) {
-  const token = useUIStore((s) => s.token);
-  const board = useDragDropBoard(tasks, token, onTaskUpdated);
+  const board = useDragDropBoard(tasks, onTaskUpdated);
 
   return (
     <BoardWrapper

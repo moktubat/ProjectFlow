@@ -16,27 +16,21 @@ export function LoginView() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!usernameOrEmail || !password) {
-      setError("Please enter your username/email and password.");
-      return;
-    }
     setIsLoading(true);
-    setError(null);
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ usernameOrEmail, password }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Login failed.");
-      setSuccess("Signed in successfully. Redirecting…");
-      setTimeout(() => {
-        setSession(data.user, data.token);
-        navigate("dashboard");
-      }, 600);
+      if (!res.ok) throw new Error(data.error);
+
+      setSession(data.user);
+      navigate("dashboard");
     } catch (err: any) {
-      setError(err.message || "Invalid credentials.");
+      setError(err.message);
     } finally {
       setIsLoading(false);
     }

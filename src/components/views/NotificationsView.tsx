@@ -3,9 +3,9 @@ import { useUIStore } from "../../store/ui-store.js";
 import { Button } from "../ui/Button.js";
 import { Bell, Briefcase, BookmarkCheck, Calendar } from "lucide-react";
 import { Pagination } from "../ui/Pagination.js";
+import { apiFetch } from "@/src/lib/api.js";
 
 export function NotificationsView() {
-  const token = useUIStore((s) => s.token);
   const notifications = useUIStore((s) => s.notifications);
   const setNotifications = useUIStore((s) => s.setNotifications);
   const navigate = useUIStore((s) => s.navigate);
@@ -15,10 +15,9 @@ export function NotificationsView() {
 
   // Only fetches explicitly on user action (mark read), not on mount
   const fetchNotifications = async () => {
-    if (!token) return;
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/notifications?page=${page}`, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await apiFetch(`/api/notifications?page=${page}`);
       if (res.ok) {
         const json = await res.json();
         setNotifications(json.data ?? json);
@@ -29,11 +28,10 @@ export function NotificationsView() {
     }
   };
 
-  useEffect(() => { fetchNotifications(); }, [token, page]);
+  useEffect(() => { fetchNotifications(); }, [page]);
 
   const markRead = async (id: string, projectId?: string) => {
-    if (!token) return;
-    const res = await fetch(`/api/notifications/${id}/read`, { method: "PUT", headers: { Authorization: `Bearer ${token}` } });
+    const res = await apiFetch(`/api/notifications/${id}/read`, { method: "PUT" });
     if (res.ok) {
       await fetchNotifications();
       if (projectId) navigate(`projects/${projectId}`);
@@ -41,8 +39,7 @@ export function NotificationsView() {
   };
 
   const markAllRead = async () => {
-    if (!token) return;
-    const res = await fetch("/api/notifications/read-all", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    const res = await apiFetch("/api/notifications/read-all", { method: "POST" });
     if (res.ok) await fetchNotifications();
   };
 
@@ -54,7 +51,7 @@ export function NotificationsView() {
       <div className="flex items-center justify-between bg-white rounded-xl border border-[#E8E8E8] px-5 py-4">
         <div>
           <h2 className="text-base font-semibold text-[#111111]">Notifications</h2>
-          <p className="text-sm text-[#737373] mt-0.5">
+          <p className="text-sm text-slate-500 mt-0.5">
             {unread.length > 0 ? `${unread.length} unread` : "All caught up"}
           </p>
         </div>
@@ -74,13 +71,13 @@ export function NotificationsView() {
             className={`flex items-start gap-3.5 px-5 py-4 transition-colors ${n.isRead ? "" : "bg-[#F7F8FA]"}`}
           >
             {/* Icon */}
-            <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${n.type === "approval" ? "bg-[#e8edfb] text-[#0038BC]" : "bg-[#fef3dc] text-[#EF8F00]"}`}>
+            <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${n.type === "approval" ? "bg-primary-light text-[#0038BC]" : "bg-accent-light text-[#EF8F00]"}`}>
               {n.type === "approval" ? <BookmarkCheck className="w-4 h-4" /> : <Briefcase className="w-4 h-4" />}
             </div>
 
             {/* Content */}
             <div className="flex-1 min-w-0">
-              <p className={`text-sm ${n.isRead ? "text-[#525252]" : "text-[#111111] font-medium"}`}>
+              <p className={`text-sm ${n.isRead ? "text-slate-600" : "text-[#111111] font-medium"}`}>
                 {n.message}
               </p>
               <p className="text-xs text-[#A0A0A0] mt-1 flex items-center gap-1">
@@ -95,7 +92,7 @@ export function NotificationsView() {
                 onClick={() => markRead(n.id, n.relatedProjectId)}
                 variant="ghost"
                 size="sm"
-                className="shrink-0 text-[#0038BC] hover:bg-[#e8edfb]"
+                className="shrink-0 text-[#0038BC] hover:bg-primary-light"
                 disabled={isLoading}
               >
                 Mark read
@@ -109,7 +106,7 @@ export function NotificationsView() {
         {notifications.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <Bell className="w-10 h-10 text-[#D0D0D0] mb-3" />
-            <p className="font-medium text-[#525252]">No notifications</p>
+            <p className="font-medium text-slate-600">No notifications</p>
             <p className="text-sm text-[#A0A0A0] mt-1">You'll be notified here when things happen.</p>
           </div>
         )}

@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import { useState, useCallback, useRef, useEffect } from "react";
 import {
     DragEndEvent,
@@ -24,21 +19,17 @@ export const BOARD_STATUSES: Task["status"][] = [
 
 export function useDragDropBoard(
     tasks: Task[],
-    token: string | null,
     onTaskUpdated: () => void
 ) {
     const [localTasks, setLocalTasks] = useState<Task[]>(tasks);
     const [activeTask, setActiveTask] = useState<Task | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const isDragging = useRef(false);
-
     const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
         return () => {
-            if (refreshTimerRef.current) {
-                clearTimeout(refreshTimerRef.current);
-            }
+            if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
         };
     }, []);
 
@@ -57,12 +48,8 @@ export function useDragDropBoard(
     }, []);
 
     const sensors = useSensors(
-        useSensor(PointerSensor, {
-            activationConstraint: { distance: 5 },
-        }),
-        useSensor(TouchSensor, {
-            activationConstraint: { delay: 200, tolerance: 5 },
-        })
+        useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+        useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } })
     );
 
     const handleDragStart = useCallback((event: DragStartEvent) => {
@@ -75,19 +62,15 @@ export function useDragDropBoard(
     const handleDragOver = useCallback((event: DragOverEvent) => {
         const { active, over } = event;
         if (!over) return;
-        const activeId = active.id as string;
-        const overId = over.id as string;
-
-        const overTask = localTasks.find((t) => t.id === overId);
+        const overTask = localTasks.find((t) => t.id === over.id);
         const overStatus = overTask
             ? overTask.status
-            : BOARD_STATUSES.includes(overId as Task["status"])
-                ? (overId as Task["status"])
+            : BOARD_STATUSES.includes(over.id as Task["status"])
+                ? (over.id as Task["status"])
                 : null;
         if (!overStatus) return;
-
         setLocalTasks((prev) =>
-            prev.map((t) => (t.id === activeId ? { ...t, status: overStatus } : t))
+            prev.map((t) => (t.id === active.id ? { ...t, status: overStatus } : t))
         );
     }, [localTasks]);
 
@@ -95,41 +78,31 @@ export function useDragDropBoard(
         async (event: DragEndEvent) => {
             isDragging.current = false;
             setActiveTask(null);
-
             const { active, over } = event;
-            if (!over || !token) return;
+            if (!over) return;
 
-            const activeId = active.id as string;
-            // Status was already applied optimistically in handleDragOver.
-            const movedTask = localTasks.find((t) => t.id === activeId);
+            const movedTask = localTasks.find((t) => t.id === active.id);
             if (!movedTask) return;
 
             const newStatus = movedTask.status;
-            const originalTask = tasks.find((t) => t.id === activeId);
+            const originalTask = tasks.find((t) => t.id === active.id);
             if (!originalTask || originalTask.status === newStatus) return;
 
             try {
-                const res = await fetch(`/api/tasks/${activeId}`, {
+                const res = await fetch(`/api/tasks/${active.id}`, {
                     method: "PUT",
-                    headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${token}`,
-                    },
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
                     body: JSON.stringify({ status: newStatus }),
                 });
-
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({} as { error?: string }));
                     setLocalTasks(tasks);
                     setErrorMsg(data.error || "Could not move task — change rolled back.");
                     setTimeout(() => setErrorMsg(null), 4000);
                 } else {
-                    if (refreshTimerRef.current) {
-                        clearTimeout(refreshTimerRef.current);
-                    }
-                    refreshTimerRef.current = setTimeout(() => {
-                        onTaskUpdated();
-                    }, 500);
+                    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+                    refreshTimerRef.current = setTimeout(() => onTaskUpdated(), 500);
                 }
             } catch {
                 setLocalTasks(tasks);
@@ -137,7 +110,7 @@ export function useDragDropBoard(
                 setTimeout(() => setErrorMsg(null), 4000);
             }
         },
-        [localTasks, tasks, token, onTaskUpdated]
+        [localTasks, tasks, onTaskUpdated]
     );
 
     const handleDragCancel = useCallback(() => {

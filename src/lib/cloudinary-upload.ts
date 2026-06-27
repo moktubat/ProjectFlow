@@ -1,6 +1,5 @@
 export async function uploadFileToCloudinary(
-    file: File,
-    token: string | null
+    file: File
 ): Promise<{ url: string; simulated?: boolean }> {
     const base64Data = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -8,11 +7,13 @@ export async function uploadFileToCloudinary(
         reader.onerror = reject;
         reader.readAsDataURL(file);
     });
+
     const res = await fetch("/api/cloudinary/upload", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ base64Data, filename: file.name }),
     });
+
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     return data;

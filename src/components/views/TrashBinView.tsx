@@ -1,13 +1,13 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useUIStore } from "../../store/ui-store.js";
 import { Button } from "../ui/Button.js";
 import { Trash2, RotateCcw, Trash, AlertCircle, FileText, CheckSquare, Info } from "lucide-react";
+import { apiFetch } from "@/src/lib/api.js";
 
 interface TrashedProject { id: string; name: string; startDate: string; endDate: string; deletedAt?: string; }
 interface TrashedTask { id: string; title: string; projectName?: string; category: string; deletedAt?: string; }
 
 export default function TrashBinView() {
-  const token = useUIStore((s) => s.token);
   const navigate = useUIStore((s) => s.navigate);
   const [projects, setProjects] = useState<TrashedProject[]>([]);
   const [tasks, setTasks] = useState<TrashedTask[]>([]);
@@ -17,22 +17,20 @@ export default function TrashBinView() {
   const [acting, setActing] = useState<string | null>(null);
 
   const load = async () => {
-    if (!token) return;
     setLoading(true);
     try {
-      const r = await fetch("/api/trash", { headers: { Authorization: `Bearer ${token}` } });
+      const r = await apiFetch("/api/trash");
       if (r.ok) { const d = await r.json(); setProjects(d.projects ?? []); setTasks(d.tasks ?? []); }
       else setFeedback({ ok: false, msg: "Failed to load trash." });
     } catch { setFeedback({ ok: false, msg: "Network error." }); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, [token]);
+  useEffect(() => { load(); }, []);
 
   const restore = async (type: "project" | "task", id: string) => {
-    if (!token) return;
     setActing(id); setFeedback(null);
-    const r = await fetch(`/api/trash/restore/${type}/${id}`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    const r = await apiFetch(`/api/trash/restore/${type}/${id}`, { method: "POST" });
     const d = await r.json();
     setFeedback({ ok: r.ok, msg: d.message ?? d.error ?? "Done" });
     if (r.ok) load();
@@ -40,9 +38,9 @@ export default function TrashBinView() {
   };
 
   const purge = async (type: "project" | "task", id: string, name: string) => {
-    if (!token || !confirm(`Permanently delete "${name}"? This cannot be undone.`)) return;
+    if (!confirm(`Permanently delete "${name}"? This cannot be undone.`)) return;
     setActing(id); setFeedback(null);
-    const r = await fetch(`/api/trash/delete/${type}/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+    const r = await apiFetch(`/api/trash/delete/${type}/${id}`, { method: "DELETE" });
     const d = await r.json();
     setFeedback({ ok: r.ok, msg: d.message ?? d.error ?? "Done" });
     if (r.ok) load();
@@ -60,7 +58,7 @@ export default function TrashBinView() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-[#111111]">Trash</h2>
-            <p className="text-sm text-[#737373] mt-0.5">Items are permanently deleted after 15 days</p>
+            <p className="text-sm text-slate-500 mt-0.5">Items are permanently deleted after 15 days</p>
           </div>
           <Button onClick={() => navigate("dashboard")} variant="outline" size="sm">Back to workspace</Button>
         </div>
@@ -80,7 +78,7 @@ export default function TrashBinView() {
       <div className="flex gap-1 bg-[#F4F4F4] p-1 rounded-xl w-fit">
         {(["all", "projects", "tasks"] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)}
-            className={`px-3 py-1.5 text-sm rounded-lg capitalize transition-colors ${tab === t ? "bg-white text-[#111111] font-medium shadow-sm" : "text-[#737373] hover:text-[#111111]"}`}>
+            className={`px-3 py-1.5 text-sm rounded-lg capitalize transition-colors ${tab === t ? "bg-white text-[#111111] font-medium shadow-sm" : "text-slate-500 hover:text-[#111111]"}`}>
             {t === "all" ? `All (${projects.length + tasks.length})` : t === "projects" ? `Projects (${projects.length})` : `Tasks (${tasks.length})`}
           </button>
         ))}
@@ -102,8 +100,8 @@ export default function TrashBinView() {
                     <div key={p.id} className="bg-white border border-[#E8E8E8] rounded-xl p-4">
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <FileText className="w-3.5 h-3.5 text-[#737373]" />
-                          <span className="text-xs text-[#737373]">Project</span>
+                          <FileText className="w-3.5 h-3.5 text-slate-500" />
+                          <span className="text-xs text-slate-500">Project</span>
                         </div>
                         <span className={`text-xs px-2 py-0.5 rounded-md font-medium ${d <= 3 ? "bg-red-50 text-red-700 border border-red-200" : "bg-amber-50 text-amber-700 border border-amber-200"}`}>
                           {d}d left
@@ -136,15 +134,15 @@ export default function TrashBinView() {
                     <div key={t.id} className="bg-white border border-[#E8E8E8] rounded-xl p-4">
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <CheckSquare className="w-3.5 h-3.5 text-[#737373]" />
-                          <span className="text-xs text-[#737373]">Task</span>
+                          <CheckSquare className="w-3.5 h-3.5 text-slate-500" />
+                          <span className="text-xs text-slate-500">Task</span>
                         </div>
                         <span className={`text-xs px-2 py-0.5 rounded-md font-medium ${d <= 3 ? "bg-red-50 text-red-700 border border-red-200" : "bg-amber-50 text-amber-700 border border-amber-200"}`}>
                           {d}d left
                         </span>
                       </div>
                       <p className="text-sm font-medium text-[#111111] mb-0.5">{t.title}</p>
-                      {t.projectName && <p className="text-xs text-[#737373] mb-0.5">Project: {t.projectName}</p>}
+                      {t.projectName && <p className="text-xs text-slate-500 mb-0.5">Project: {t.projectName}</p>}
                       <p className="text-xs text-[#A0A0A0] mb-3">Deleted {t.deletedAt ? new Date(t.deletedAt).toLocaleDateString() : "—"}</p>
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" onClick={() => restore("task", t.id)} isLoading={acting === t.id}>
@@ -166,7 +164,7 @@ export default function TrashBinView() {
             (tab === "tasks" && tasks.length === 0)) && (
               <div className="flex flex-col items-center justify-center py-16 border-2 border-dashed border-[#E8E8E8] rounded-xl">
                 <Trash2 className="w-8 h-8 text-[#D0D0D0] mb-2" />
-                <p className="text-sm text-[#525252]">Trash is empty</p>
+                <p className="text-sm text-slate-600">Trash is empty</p>
                 <p className="text-xs text-[#A0A0A0] mt-1">Nothing here waiting to be deleted.</p>
               </div>
             )}

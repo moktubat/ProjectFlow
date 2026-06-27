@@ -20,7 +20,7 @@ import { ToastNotificationManager } from "./components/layout/ToastNotificationM
 installFetchInterceptor();
 
 export default function App() {
-  const token = useUIStore((s) => s.token);
+  const user = useUIStore((s) => s.user);
   const currentPath = useUIStore((s) => s.currentPath);
   const setSession = useUIStore((s) => s.setSession);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -29,17 +29,17 @@ export default function App() {
   useNotificationPolling();
 
   useEffect(() => {
-    const saved = localStorage.getItem("projectflow_token");
-    if (saved) {
-      fetch("/api/auth/session", { headers: { Authorization: `Bearer ${saved}` } })
-        .then((r) => (r.ok ? r.json() : Promise.reject()))
-        .then((d) => setSession(d.user, saved))
-        .catch(() => {
-          localStorage.removeItem("projectflow_token");
-          localStorage.removeItem("projectflow_user");
-        });
-    }
-  }, []);
+    fetch("/api/auth/session", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => {
+        setSession(d.user);
+      })
+      .catch(() => {
+        localStorage.removeItem("projectflow_user");
+        localStorage.removeItem("projectflow_token");
+        setSession(null);
+      });
+  }, [setSession]);
 
   useEffect(() => {
     const prevent = (e: DragEvent) => e.preventDefault();
@@ -51,8 +51,13 @@ export default function App() {
     };
   }, []);
 
-  if (!token) {
+  if (!user) {
     return currentPath === "register" ? <RegisterView /> : <LoginView />;
+  }
+
+  if (currentPath === "login" || currentPath === "register") {
+    window.location.hash = "#/dashboard";
+    return <DashboardView />;
   }
 
   const renderView = () => {

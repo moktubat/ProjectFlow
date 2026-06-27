@@ -171,8 +171,7 @@ function TaskListSection({
 }
 
 export function TaskListBoard({ tasks, users, onTaskUpdated }: TaskListBoardProps) {
-    const token = useUIStore((s) => s.token);
-    const board = useDragDropBoard(tasks, token, onTaskUpdated);
+    const board = useDragDropBoard(tasks, onTaskUpdated);
 
     return (
         <BoardWrapper

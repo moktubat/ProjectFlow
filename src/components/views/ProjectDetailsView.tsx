@@ -23,6 +23,7 @@ import {
 import DOMPurify from "dompurify";
 import { uploadFileToCloudinary } from "@/src/lib/cloudinary-upload.js";
 import { generateWithGemini } from "@/src/lib/ai-generate.js";
+import { apiFetch } from "@/src/lib/api.js";
 
 const SEL = "w-full px-3 py-2 bg-white border border-[#D0D0D0] rounded-lg text-sm focus:outline-none focus:border-[#0038BC] focus:ring-2 focus:ring-[#0038BC]/10";
 
@@ -94,7 +95,6 @@ function InlineEditText({
 export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const { project, isLoading: projLoading, error: projError, refresh: reloadProject, updateProject, deleteProject, uploadFile } = useProject(projectId);
   const { tasks, isLoading: tasksLoading, refresh: reloadTasks, refreshSilent, updateTaskStatus } = useTasks(projectId);
-  const token = useUIStore((s) => s.token);
   const navigate = useUIStore((s) => s.navigate);
 
   usePageTitle(
@@ -158,10 +158,9 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const [savingUser, setSavingUser] = useState<string | null>(null);
 
   const loadRoster = async () => {
-    if (!token) return;
     const [uRes, tRes] = await Promise.all([
-      fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
-      fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
+      apiFetch("/api/users"),
+      apiFetch("/api/teams"),
     ]);
     if (uRes.ok) {
       const j = await uRes.json();
@@ -171,7 +170,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
     if (tRes.ok) setTeams(await tRes.json());
   };
 
-  useEffect(() => { loadRoster(); }, [token, project?.members?.length]);
+  useEffect(() => { loadRoster(); }, [project?.members?.length]);
 
   const handleBoardTaskUpdate = useCallback((taskId?: string, newStatus?: string) => {
     if (taskId && newStatus) {
@@ -202,7 +201,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
   const totalEst = tasks.reduce((s, t) => s + (t.estimatedHours ?? 0), 0);
 
   const exportCSV = () => {
-    fetch(`/api/projects/${projectId}/hours/export`, { headers: { Authorization: `Bearer ${token}` } })
+    apiFetch(`/api/projects/${projectId}/hours/export`)
       .then((r) => r.blob())
       .then((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `project_${projectId}_hours.csv`; a.click(); });
   };
@@ -240,8 +239,7 @@ export function ProjectDetailsView({ projectId }: { projectId: string }) {
         `Write a professional project description for a software project management tool. 
 Project name: "${project.name}"
 Additional context: ${aiPrompt}
-Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Use plain text, no markdown.`,
-        token
+Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Use plain text, no markdown.`
       );
       setDescDraft(text);
       setShowAiPrompt(false);
@@ -257,7 +255,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
   const uploadCoverToCloudinary = async (file: File) => {
     setCoverUploading(true);
     try {
-      const data = await uploadFileToCloudinary(file, token);
+      const data = await uploadFileToCloudinary(file);
       setCoverDraft(data.url);
     } catch (e: any) { alert(e.message); }
     finally { setCoverUploading(false); }
@@ -277,7 +275,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
       const depsWithNote = tDeps.map((d) => (depNote.trim() ? { ...d, note: depNote.trim() } : d));
       const res = await fetch("/api/tasks", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId, title: tTitle, richTextDesc: DOMPurify.sanitize(tDesc), status: tStatus, priority: tPri, category: tCat, dueDate: tDue, estimatedHours: Number(tEst) || 0, assignees: tAsgn, dependencies: depsWithNote }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
@@ -293,7 +291,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
     setUploadErr(null);
     setFName(file.name);
     try {
-      const data = await uploadFileToCloudinary(file, token);
+      const data = await uploadFileToCloudinary(file);
       setFUrl(data.url);
       if (data.simulated) setUploadErr("Simulation mode — placeholder URL set.");
     } catch (e: any) { setUploadErr(e.message); }
@@ -313,9 +311,8 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
     if (!confirm(`Remove "${fileName}" from this project?`)) return;
     setDeletingFileId(fileId);
     try {
-      const res = await fetch(`/api/files/${fileId}?projectId=${projectId}`, {
+      const res = await apiFetch(`/api/files/${fileId}?projectId=${projectId}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({} as { error?: string }));
@@ -331,19 +328,19 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
 
   const addToProject = async (uid: string) => {
     if (project.members.includes(uid)) return;
-    await fetch(`/api/projects/${projectId}`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ members: [...project.members, uid] }) });
+    await apiFetch(`/api/projects/${projectId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ members: [...project.members, uid] }) });
     reloadProject(); loadRoster();
   };
 
   const removeFromProject = async (uid: string) => {
-    await fetch(`/api/projects/${projectId}`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ members: project.members.filter((id) => id !== uid) }) });
+    await apiFetch(`/api/projects/${projectId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ members: project.members.filter((id) => id !== uid) }) });
     reloadProject(); loadRoster();
   };
 
   const saveUserDetails = async (uid: string, current: User) => {
     setSavingUser(uid);
-    await fetch(`/api/users/${uid}/details`, {
-      method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    await apiFetch(`/api/users/${uid}/details`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: editRoles[uid] ?? current.role, teamId: editTeams[uid] ?? current.teamId ?? "none" }),
     });
     loadRoster();
@@ -355,7 +352,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
 
   return (
     <div className="space-y-4">
-      <button onClick={() => navigate("projects")} className="flex items-center gap-1.5 text-sm text-[#737373] hover:text-[#111111] transition-colors">
+      <button onClick={() => navigate("projects")} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-[#111111] transition-colors">
         <ArrowLeft className="w-4 h-4" /> Back to projects
       </button>
 
@@ -394,7 +391,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
             alt={project.name}
             className="w-full h-full object-cover opacity-60"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+          <div className="absolute inset-0 bg-linear-to-t from-black/80 via-black/20 to-transparent" />
 
           {/* Edit cover button — top right */}
           {!editingCover && (
@@ -408,7 +405,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
 
           <div className="absolute bottom-4 left-5 right-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
             <div className="flex-1 min-w-0">
-              <div className="mb-2 max-w-[220px]">
+              <div className="mb-2 max-w-55">
                 <DateRangePicker
                   value={{ start: project.startDate, end: project.endDate }}
                   onChange={({ start, end }) => handleSaveDates(start, end)}
@@ -448,7 +445,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
         {/* Stats bar */}
         <div className="grid grid-cols-3 divide-x divide-[#E8E8E8] text-sm">
           <div className="px-4 py-3 flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-[#737373] text-xs"><TrendingUp className="w-3.5 h-3.5" />Progress</span>
+            <span className="flex items-center gap-1.5 text-slate-500 text-xs"><TrendingUp className="w-3.5 h-3.5" />Progress</span>
             <div className="flex items-center gap-2">
               <div className="w-16 h-1.5 bg-[#EEEEEE] rounded-full">
                 <div className="h-full bg-[#0038BC] rounded-full transition-all" style={{ width: `${progress}%` }} />
@@ -457,14 +454,14 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
             </div>
           </div>
           <div className="px-4 py-3 flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-[#737373] text-xs"><Clock className="w-3.5 h-3.5" />Hours</span>
+            <span className="flex items-center gap-1.5 text-slate-500 text-xs"><Clock className="w-3.5 h-3.5" />Hours</span>
             <span className="text-sm font-medium text-[#111111]">{totalLogged}h / {totalEst}h</span>
           </div>
           <div className="px-4 py-3 flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-[#737373] text-xs"><Users className="w-3.5 h-3.5" />Members</span>
+            <span className="flex items-center gap-1.5 text-slate-500 text-xs"><Users className="w-3.5 h-3.5" />Members</span>
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-[#111111]">{project.members?.length ?? 0}</span>
-              <button onClick={() => setRosterPanel(true)} className="p-1 bg-[#e8edfb] text-[#0038BC] hover:bg-[#0038BC] hover:text-white rounded transition-colors">
+              <button onClick={() => setRosterPanel(true)} className="p-1 bg-primary-light text-[#0038BC] hover:bg-[#0038BC] hover:text-white rounded transition-colors">
                 <Settings className="w-3 h-3" />
               </button>
             </div>
@@ -478,7 +475,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
           <div className="flex border-b border-[#E8E8E8]">
             {(["charter", "activity"] as const).map((t) => (
               <button key={t} onClick={() => setDetailTab(t)}
-                className={`px-4 py-2.5 text-sm border-b-2 transition-colors ${detailTab === t ? "border-[#0038BC] text-[#0038BC] font-medium" : "border-transparent text-[#737373] hover:text-[#111111]"}`}>
+                className={`px-4 py-2.5 text-sm border-b-2 transition-colors ${detailTab === t ? "border-[#0038BC] text-[#0038BC] font-medium" : "border-transparent text-slate-500 hover:text-[#111111]"}`}>
                 {t === "charter" ? "Description" : "Activity"}
               </button>
             ))}
@@ -489,11 +486,11 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
                 {!editingDesc ? (
                   <div className="group">
                     <div className="flex items-center justify-between mb-3">
-                      <p className="text-xs text-[#737373] font-medium uppercase tracking-wide">Project description</p>
+                      <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Project description</p>
                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={() => { setDescDraft(project.richTextDescription || ""); setEditingDesc(true); }}
-                          className="flex items-center gap-1 text-xs text-[#737373] hover:text-[#0038BC] hover:bg-[#e8edfb] px-2 py-1 rounded-lg transition-colors"
+                          className="flex items-center gap-1 text-xs text-slate-500 hover:text-[#0038BC] hover:bg-primary-light px-2 py-1 rounded-lg transition-colors"
                         >
                           <Pencil className="w-3 h-3" /> Edit
                         </button>
@@ -501,7 +498,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
                     </div>
                     {project.richTextDescription ? (
                       <div
-                        className="prose prose-sm max-w-none text-[#525252]"
+                        className="prose prose-sm max-w-none text-slate-600"
                         dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(project.richTextDescription) }}
                       />
                     ) : (
@@ -519,14 +516,14 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
                       <p className="text-sm font-medium text-[#111111]">Edit description</p>
                       <button
                         onClick={() => setShowAiPrompt(!showAiPrompt)}
-                        className="flex items-center gap-1.5 text-xs text-[#EF8F00] hover:text-[#d67f00] font-medium px-2 py-1 bg-[#fef3dc] hover:bg-[#fde8b0] rounded-lg transition-colors"
+                        className="flex items-center gap-1.5 text-xs text-[#EF8F00] hover:text-accent-hover font-medium px-2 py-1 bg-accent-light hover:bg-[#fde8b0] rounded-lg transition-colors"
                       >
                         <Sparkles className="w-3 h-3" /> AI Generate
                       </button>
                     </div>
 
                     {showAiPrompt && (
-                      <div className="p-3 bg-[#fef3dc] border border-[#EF8F00]/20 rounded-xl space-y-2">
+                      <div className="p-3 bg-accent-light border border-[#EF8F00]/20 rounded-xl space-y-2">
                         <p className="text-xs font-medium text-[#9a5b00]">Describe what you want AI to write:</p>
                         <textarea
                           rows={2}
@@ -573,7 +570,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
         <div className="bg-white border border-[#E8E8E8] rounded-xl">
           <div className="flex items-center justify-between px-4 py-3 border-b border-[#E8E8E8]">
             <span className="flex items-center gap-1.5 text-sm text-[#111111]">
-              <Paperclip className="w-3.5 h-3.5 text-[#737373]" /> Files
+              <Paperclip className="w-3.5 h-3.5 text-slate-500" /> Files
             </span>
             <button onClick={() => setFilePanel(true)} className="text-xs text-[#0038BC] hover:underline">+ Add</button>
           </div>
@@ -624,13 +621,13 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 border-b border-[#E8E8E8]">
           <div>
             <p className="text-sm font-medium text-[#111111]">Task board</p>
-            <p className="text-xs text-[#737373] mt-0.5">{tasks.length} tasks total</p>
+            <p className="text-xs text-slate-500 mt-0.5">{tasks.length} tasks total</p>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex bg-[#F4F4F4] p-0.5 rounded-lg text-xs">
               {(["kanban", "list", "analytics"] as const).map((v) => (
                 <button key={v} onClick={() => setViewMode(v)}
-                  className={`px-3 py-1.5 rounded-md capitalize transition-colors ${viewMode === v ? "bg-white text-[#111111] shadow-sm font-medium" : "text-[#737373]"}`}>
+                  className={`px-3 py-1.5 rounded-md capitalize transition-colors ${viewMode === v ? "bg-white text-[#111111] shadow-sm font-medium" : "text-slate-500"}`}>
                   {v === "kanban" ? "Board" : v === "list" ? "List" : "Analytics"}
                 </button>
               ))}
@@ -683,7 +680,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
               ["Category", tCat, setTCat, ["Development", "Design", "QA", "Management", "Billing", "Others"]],
             ] as any[]).map(([lbl, val, set, opts]) => (
               <div key={lbl}>
-                <label className="block text-xs text-[#737373] mb-1">{lbl}</label>
+                <label className="block text-xs text-slate-500 mb-1">{lbl}</label>
                 <select value={val} onChange={(e) => set(e.target.value)} className={SEL}>
                   {opts.map((o: string) => <option key={o}>{o}</option>)}
                 </select>
@@ -691,11 +688,11 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
             ))}
           </div>
           <div>
-            <label className="block text-xs text-[#737373] mb-1">Description</label>
+            <label className="block text-xs text-slate-500 mb-1">Description</label>
             <MarkdownEditor value={tDesc} onChange={setTDesc} projectId={projectId} />
           </div>
           <div>
-            <label className="block text-xs text-[#737373] mb-1.5">Assignees</label>
+            <label className="block text-xs text-slate-500 mb-1.5">Assignees</label>
             <AssigneePicker
               users={users}
               teams={teams}
@@ -705,7 +702,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
             />
           </div>
           <div>
-            <label className="block text-xs text-[#737373] mb-1.5">Dependencies (person/team blockers)</label>
+            <label className="block text-xs text-slate-500 mb-1.5">Dependencies (person/team blockers)</label>
             <AssigneePicker
               users={users}
               teams={teams}
@@ -744,7 +741,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
             className="border-2 border-dashed border-[#D0D0D0] rounded-lg p-6 text-center cursor-pointer hover:border-[#0038BC] transition-colors">
             <input id="file-inp" type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadToCloudinary(f); }} />
             <Paperclip className="w-6 h-6 text-[#A0A0A0] mx-auto mb-2" />
-            {uploading ? <p className="text-sm text-[#737373] animate-pulse">Uploading…</p> : fUrl ? <p className="text-sm text-green-600 font-medium">File uploaded ✓</p> : <p className="text-sm text-[#737373]">Drop or click to upload</p>}
+            {uploading ? <p className="text-sm text-slate-500 animate-pulse">Uploading…</p> : fUrl ? <p className="text-sm text-green-600 font-medium">File uploaded ✓</p> : <p className="text-sm text-slate-500">Drop or click to upload</p>}
             {uploadErr && <p className="text-xs text-[#EF8F00] mt-1">{uploadErr}</p>}
           </div>
           <Input label="File name" value={fName} onChange={(e) => setFName(e.target.value)} required />
@@ -766,13 +763,13 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-[#737373] mb-1">Role</label>
+                <label className="block text-xs text-slate-500 mb-1">Role</label>
                 <select value={invRole} onChange={(e) => setInvRole(e.target.value)} className={SEL}>
                   {["PROJECT_MANAGER", "TEAM_LEAD", "DEVELOPER", "DESIGNER", "SENIOR", "JUNIOR"].map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-[#737373] mb-1">Team</label>
+                <label className="block text-xs text-slate-500 mb-1">Team</label>
                 <select value={invTeam} onChange={(e) => setInvTeam(e.target.value)} className={SEL}>
                   <option value="">No team</option>
                   {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -780,7 +777,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
               </div>
             </div>
             <div className="flex items-center gap-2 bg-white border border-[#E8E8E8] rounded-lg px-3 py-2">
-              <span className="text-xs text-[#737373] truncate flex-1 font-mono">{inviteUrl}</span>
+              <span className="text-xs text-slate-500 truncate flex-1 font-mono">{inviteUrl}</span>
               <button onClick={copyInvite} className="flex items-center gap-1 text-xs text-[#0038BC] font-medium shrink-0 hover:underline">
                 {copied ? <><Check className="w-3 h-3" />Copied</> : <><Copy className="w-3 h-3" />Copy</>}
               </button>
@@ -794,7 +791,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
                 <div key={u.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 border border-[#E8E8E8] rounded-lg bg-white">
                   <div>
                     <p className="text-sm text-[#111111] font-medium">{u.name}</p>
-                    <p className="text-xs text-[#737373]">@{u.username}</p>
+                    <p className="text-xs text-slate-500">@{u.username}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <select value={editRoles[u.id] ?? u.role} onChange={(e) => setEditRoles((p) => ({ ...p, [u.id]: e.target.value }))}
@@ -826,7 +823,7 @@ Write 2-3 clear paragraphs covering objectives, scope, and expected outcomes. Us
                 <div key={u.id} className="flex items-center justify-between p-2 bg-white border border-[#E8E8E8] rounded-lg">
                   <div>
                     <p className="text-sm text-[#111111] font-medium">{u.name}</p>
-                    <p className="text-xs text-[#737373]">@{u.username}</p>
+                    <p className="text-xs text-slate-500">@{u.username}</p>
                   </div>
                   <button onClick={() => addToProject(u.id)} className="text-xs text-[#0038BC] hover:underline font-medium">+ Add</button>
                 </div>

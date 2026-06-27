@@ -1,17 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { Task } from "../types/index.js";
-import { useUIStore } from "../store/ui-store.js";
 
 export function useTasks(projectId?: string) {
-  const token = useUIStore((state) => state.token);
   const queryClient = useQueryClient();
 
   const query = useQuery<Task[]>({
     queryKey: ["tasks", projectId],
     queryFn: async () => {
       const url = projectId ? `/api/tasks?projectId=${projectId}` : "/api/tasks";
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(url, { credentials: "include" });
       if (!res.ok) {
         const errObj = await res.json().catch(() => ({}));
         throw new Error(errObj.error || "Failed to load tasks.");
@@ -19,18 +17,16 @@ export function useTasks(projectId?: string) {
       const json = await res.json();
       return json.data ?? json;
     },
-    enabled: !!token,
   });
 
   const createMutation = useMutation({
     mutationFn: async (taskData: Partial<Task>) => {
-      if (!token) throw new Error("Authentication required.");
       const payload = { ...taskData };
       if (projectId) payload.projectId = projectId;
-
       const res = await fetch("/api/tasks", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(payload),
       });
       const data = await res.json();

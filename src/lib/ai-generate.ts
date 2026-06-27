@@ -1,13 +1,10 @@
 import DOMPurify from "dompurify";
 
-export async function generateWithGemini(prompt: string, token: string | null): Promise<string> {
-    if (!token) throw new Error("You must be signed in to use AI generation.");
-
+export async function generateWithGemini(prompt: string): Promise<string> {
     const res = await fetch("/api/ai/generate", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ prompt }),
     });

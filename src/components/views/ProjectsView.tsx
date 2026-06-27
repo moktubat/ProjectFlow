@@ -19,6 +19,7 @@ import {
 import { deriveProjectStatus, DerivedProjectStatus } from "../../lib/project-status.js";
 import { AssigneePicker } from "../AssigneePicker.js";
 import { uploadFileToCloudinary } from "@/src/lib/cloudinary-upload.js";
+import { apiFetch } from "@/src/lib/api.js";
 
 const FALLBACK_COVER =
   "https://images.unsplash.com/photo-1507537297725-24a1c029d3ca?auto=format&fit=crop&q=80&w=600";
@@ -41,7 +42,7 @@ const STATUS_FILTERS = ["All", "Ongoing", "Done"] as const;
 function StatPill({ label, value, accent = false }: { label: string; value: string | number; accent?: boolean }) {
   return (
     <div
-      className={`flex items-center gap-2.5 rounded-2xl border px-4 py-2.5 transition-colors ${accent ? "border-[#0038BC]/15 bg-[#e8edfb]" : "border-[#E8E8E8] bg-white"
+      className={`flex items-center gap-2.5 rounded-2xl border px-4 py-2.5 transition-colors ${accent ? "border-[#0038BC]/15 bg-primary-light" : "border-[#E8E8E8] bg-white"
         }`}
     >
       <span className={`font-mono text-base font-semibold ${accent ? "text-[#0038BC]" : "text-[#111111]"}`}>
@@ -96,9 +97,9 @@ function FlowBar({ pct, active }: { pct: number; active: boolean }) {
     return () => cancelAnimationFrame(id);
   }, []);
   return (
-    <div className="h-[3px] w-full bg-[#F0F1F5]">
+    <div className="h-0.75 w-full bg-[#F0F1F5]">
       <div
-        className={`h-full bg-gradient-to-r from-[#0038BC] to-[#5B8DEF] transition-[width] duration-700 ease-out motion-reduce:transition-none ${active ? "motion-safe:animate-pulse" : ""
+        className={`h-full bg-linear-to-r from-[#0038BC] to-[#5B8DEF] transition-[width] duration-700 ease-out motion-reduce:transition-none ${active ? "motion-safe:animate-pulse" : ""
           }`}
         style={{ width: mounted ? `${pct}%` : "0%" }}
       />
@@ -110,7 +111,6 @@ export function ProjectsView() {
   usePageTitle("Projects", "Manage all your projects, deadlines, and teams in ProjectFlow.");
 
   const { projects, isLoading, error, refresh, createProject } = useProjects();
-  const token = useUIStore((s) => s.token);
   const user = useUIStore((s) => s.user);
   const navigate = useUIStore((s) => s.navigate);
 
@@ -138,12 +138,11 @@ export function ProjectsView() {
   const [cloudinaryError, setCloudinaryError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) return;
     Promise.all([
-      fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } }),
-      fetch("/api/tasks", { headers: { Authorization: `Bearer ${token}` } }),
-      fetch("/api/teams", { headers: { Authorization: `Bearer ${token}` } }),
-      fetch("/api/workspace/recent-assignees", { headers: { Authorization: `Bearer ${token}` } }),
+      apiFetch("/api/users"),
+      apiFetch("/api/tasks"),
+      apiFetch("/api/teams"),
+      apiFetch("/api/workspace/recent-assignees"),
     ])
       .then(async ([uRes, tRes, teamRes, recentRes]) => {
         const uJ = uRes.ok ? await uRes.json() : [];
@@ -159,7 +158,7 @@ export function ProjectsView() {
         setWorkspaceRecentIds(recentData.recentAssignees ?? []);
       })
       .catch(() => { });
-  }, [token]);
+  }, []);
 
   // Real completion stats per project, derived from tasks already in hand
   const projectStats = useMemo(() => {
@@ -212,7 +211,7 @@ export function ProjectsView() {
     setIsUploading(true);
     setCloudinaryError(null);
     try {
-      const data = await uploadFileToCloudinary(file, token);
+      const data = await uploadFileToCloudinary(file);
       setCoverUrl(data.url);
       if (data.simulated) setCloudinaryError("Simulation mode — placeholder image assigned.");
     } catch (err: any) {
@@ -283,7 +282,7 @@ export function ProjectsView() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white rounded-xl border border-[#E8E8E8] px-5 py-4">
         <div>
           <h2 className="text-base font-semibold text-[#111111]">Projects</h2>
-          <p className="text-sm text-[#737373] mt-0.5">Manage workspaces, deadlines, and teams</p>
+          <p className="text-sm text-slate-500 mt-0.5">Manage workspaces, deadlines, and teams</p>
         </div>
         <Button onClick={() => setIsPanelOpen(true)} variant="primary">
           <Plus className="w-4 h-4" />
@@ -328,7 +327,7 @@ export function ProjectsView() {
                     aria-pressed={active}
                     className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150 ${active
                       ? "bg-[#0038BC] text-white shadow-sm shadow-[#0038BC]/30 border border-transparent"
-                      : "border border-[#E8E8E8] bg-white text-[#525252] hover:border-[#0038BC]/30 hover:text-[#0038BC]"
+                      : "border border-[#E8E8E8] bg-white text-slate-600 hover:border-[#0038BC]/30 hover:text-[#0038BC]"
                       }`}
                   >
                     {s}
@@ -341,7 +340,7 @@ export function ProjectsView() {
         </div>
 
         {hasActiveFilters && (
-          <p className="text-xs text-[#737373]">
+          <p className="text-xs text-slate-500">
             {filteredProjects.length} match{filteredProjects.length !== 1 ? "es" : ""} found ·{" "}
             <button
               onClick={() => { setQuery(""); setStatusFilter("All"); }}
@@ -358,7 +357,7 @@ export function ProjectsView() {
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="overflow-hidden rounded-2xl border border-[#E8E8E8] bg-white">
                 <div className="relative h-36 overflow-hidden bg-[#F0F1F5]">
-                  <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/70 to-transparent motion-safe:animate-[pf-shimmer_1.6s_ease-in-out_infinite]" />
+                  <div className="absolute inset-0 -translate-x-full bg-linear-to-r from-transparent via-white/70 to-transparent motion-safe:animate-[pf-shimmer_1.6s_ease-in-out_infinite]" />
                 </div>
                 <div className="space-y-3 p-5">
                   <div className="h-3 w-24 rounded-full bg-[#F0F1F5]" />
@@ -383,7 +382,7 @@ export function ProjectsView() {
           </div>
         ) : projects.length === 0 ? (
           <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[#E8E8E8] py-24 text-center opacity-100 motion-safe:opacity-0 motion-safe:animate-[pf-fadeUp_0.5s_ease_forwards]">
-            <div className="relative mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#e8edfb] to-[#dbe6fb]">
+            <div className="relative mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-linear-to-br from-primary-light to-[#dbe6fb]">
               <FolderKanban className="h-7 w-7 text-[#0038BC]" />
               <span className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EF8F00] text-white shadow-md">
                 <Plus className="h-3.5 w-3.5" />
@@ -402,7 +401,7 @@ export function ProjectsView() {
             <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F4F4F4]">
               <Search className="h-5 w-5 text-[#A0A0A0]" />
             </div>
-            <p className="font-medium text-[#525252]">No projects match your search</p>
+            <p className="font-medium text-slate-600">No projects match your search</p>
             <p className="mt-1 text-sm text-[#A0A0A0]">Try a different keyword or clear your filters.</p>
             <button
               onClick={() => { setQuery(""); setStatusFilter("All"); }}
@@ -440,7 +439,7 @@ export function ProjectsView() {
                       alt=""
                       className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.07]"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/5 to-transparent" />
+                    <div className="absolute inset-0 bg-linear-to-t from-black/55 via-black/5 to-transparent" />
 
                     <div className="absolute inset-x-3 top-3 flex items-center justify-between">
                       <span
@@ -480,7 +479,7 @@ export function ProjectsView() {
                       {proj.name}
                     </h3>
 
-                    <p className="line-clamp-2 text-sm leading-relaxed text-[#737373]">
+                    <p className="line-clamp-2 text-sm leading-relaxed text-slate-500">
                       {(proj.richTextDescription || "").replace(/<[^>]*>/g, "") || "No description yet."}
                     </p>
 
@@ -492,14 +491,14 @@ export function ProjectsView() {
                             <div
                               key={mid}
                               title={m?.name ?? "Member"}
-                              className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#e8edfb] text-[10px] font-semibold text-[#0038BC]"
+                              className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-primary-light text-[10px] font-semibold text-[#0038BC]"
                             >
                               {m ? m.name.charAt(0).toUpperCase() : "?"}
                             </div>
                           );
                         })}
                         {(proj.members?.length ?? 0) > 4 && (
-                          <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#F4F4F4] text-[10px] font-semibold text-[#737373]">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#F4F4F4] text-[10px] font-semibold text-slate-500">
                             +{proj.members!.length - 4}
                           </div>
                         )}
@@ -559,7 +558,7 @@ export function ProjectsView() {
                   </span>
                 </>
               ) : isUploading ? (
-                <span className="flex items-center gap-2 text-xs text-[#737373]">
+                <span className="flex items-center gap-2 text-xs text-slate-500">
                   <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#0038BC] border-t-transparent" />
                   Uploading…
                 </span>

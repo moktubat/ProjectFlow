@@ -1,16 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Project } from "../types/index.js";
-import { useUIStore } from "../store/ui-store.js";
 
 export function useProject(projectId?: string) {
-  const token = useUIStore((state) => state.token);
   const queryClient = useQueryClient();
 
   const query = useQuery<Project>({
     queryKey: ["project", projectId],
     queryFn: async () => {
       const res = await fetch(`/api/projects/${projectId}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
       });
       if (!res.ok) {
         const errObj = await res.json().catch(() => ({}));
@@ -18,24 +16,20 @@ export function useProject(projectId?: string) {
       }
       return res.json();
     },
-    enabled: !!token && !!projectId,
+    enabled: !!projectId,
   });
 
   const updateProjectMutation = useMutation({
     mutationFn: async (data: Partial<Project>) => {
-      if (!token || !projectId) throw new Error("Authentication required.");
+      if (!projectId) throw new Error("Project ID required.");
       const res = await fetch(`/api/projects/${projectId}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(data),
       });
       const updated = await res.json();
-      if (!res.ok) {
-        throw new Error(updated.error || "Failed to update project.");
-      }
+      if (!res.ok) throw new Error(updated.error || "Failed to update project.");
       return updated;
     },
     onSuccess: (updated) => {
@@ -46,10 +40,10 @@ export function useProject(projectId?: string) {
 
   const deleteProjectMutation = useMutation({
     mutationFn: async () => {
-      if (!token || !projectId) throw new Error("Authentication required.");
+      if (!projectId) throw new Error("Project ID required.");
       const res = await fetch(`/api/projects/${projectId}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
       });
       if (!res.ok) {
         const data = await res.json();
@@ -65,19 +59,15 @@ export function useProject(projectId?: string) {
 
   const uploadFileMutation = useMutation({
     mutationFn: async ({ name, url, category }: { name: string; url: string; category?: string }) => {
-      if (!token || !projectId) throw new Error("Authentication required.");
+      if (!projectId) throw new Error("Project ID required.");
       const res = await fetch(`/api/files/confirm`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ projectId, name, url, category }),
       });
       const fileItem = await res.json();
-      if (!res.ok) {
-        throw new Error(fileItem.error || "Failed to confirm file upload.");
-      }
+      if (!res.ok) throw new Error(fileItem.error || "Failed to confirm file upload.");
       return fileItem;
     },
     onSuccess: () => {
